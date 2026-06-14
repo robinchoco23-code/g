@@ -1,0 +1,1297 @@
+-- Auto Harvest + Auto Sell + Auto Buy + Auto Plant | Grow a Garden
+-- Obsidian UI | github.com/deividcomsono/Obsidian
+
+-- =============================================
+--  EXECUTE GUARD
+-- =============================================
+if type(_G._gag_stop) == "function" then
+    pcall(_G._gag_stop)
+    task.wait(0.15)
+end
+
+local _alive = true
+local function Alive() return _alive end
+
+-- =============================================
+--  SERVICES / PLAYER
+-- =============================================
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+if not player then
+    player = Players.LocalPlayer or Players:GetPropertyChangedSignal("LocalPlayer"):Wait() and Players.LocalPlayer
+    while not player do
+        task.wait(0.1)
+        player = Players.LocalPlayer
+    end
+end
+
+local uid = tostring(player.UserId)
+
+-- =============================================
+--  NETWORKING
+-- =============================================
+local Networking = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Networking"))
+
+-- PlayerStateClient holds the local inventory replica (used for mailbox sending)
+local PlayerStateClient = nil
+pcall(function()
+    PlayerStateClient = require(ReplicatedStorage.ClientModules.PlayerStateClient)
+end)
+
+-- Categories the mailbox accepts (from MailboxItemCatalog.Categories)
+local GIFTABLE_CATEGORIES = {
+    "Pets",
+    "Sprinklers",
+    "WateringCans",
+    "Mushrooms",
+    "Gnomes",
+    "Raccoons",
+    "Crates",
+    "SeedPacks",
+    "Trowels",
+    "Props",
+    "Seeds",
+    "HarvestedFruits",
+    "EmptyPots",
+}
+
+-- =============================================
+--  LOAD OBSIDIAN
+-- =============================================
+local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+
+local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+local SaveManager  = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+
+local Toggles = Library.Toggles
+local Options  = Library.Options
+
+-- =============================================
+--  SEED LIST
+-- =============================================
+local SEEDS = {
+    "Carrot",
+    "Strawberry",
+    "Blueberry",
+    "Tulip",
+    "Tomato",
+    "Apple",
+    "Bamboo",
+    "Corn",
+    "Cactus",
+    "Pineapple",
+    "Mushroom",
+    "Green Bean",
+    "Banana",
+    "Grape",
+    "Coconut",
+    "Mango",
+    "Dragon Fruit",
+    "Acorn",
+    "Cherry",
+    "Sunflower",
+    "Venus Fly Trap",
+    "Pomegranate",
+    "Poison Apple",
+    "Moon Bloom",
+    "Dragon's Breath",
+}
+
+-- =============================================
+--  GEAR LIST
+-- =============================================
+local GEAR = {
+    "Common Watering Can",
+    "Super Watering Can",
+    "Common Sprinkler",
+    "Uncommon Sprinkler",
+    "Rare Sprinkler",
+    "Legendary Sprinkler",
+    "Super Sprinkler",
+    "Trowel",
+    "Basic Pot",
+    "Jump Mushroom",
+    "Speed Mushroom",
+    "Shrink Mushroom",
+    "Supersize Mushroom",
+    "Invisibility Mushroom",
+    "Gnome",
+    "Flashbang",
+    "Teleporter",
+}
+
+-- =============================================
+--  PET LIST  (matched against WildPet_<Type>_WildPet_<id> model names)
+-- =============================================
+local PETS = {
+    "Bee",
+    "BlackDragon",
+    "Bunny",
+    "Deer",
+    "Dragonfly",
+    "Frog",
+    "GoldenDragonfly",
+    "IceSerpent",
+    "Monkey",
+    "Owl",
+    "Raccoon",
+    "Robin",
+    "Unicorn",
+}
+
+-- =============================================
+--  WINDOW
+-- =============================================
+local Window = Library:CreateWindow({
+    Title            = "Grow a Garden",
+    Footer           = "by sacred",
+    ToggleKeybind    = Enum.KeyCode.RightControl,
+    Center           = true,
+    AutoShow         = true,
+    ShowCustomCursor = false,
+})
+
+-- =============================================
+--  MAIN TAB
+-- =============================================
+local MainTab = Window:AddTab("Main", "sprout")
+
+local HarvestBox  = MainTab:AddLeftGroupbox("Harvest")
+local SellBox     = MainTab:AddLeftGroupbox("Sell")
+local PetBox      = MainTab:AddLeftGroupbox("Auto Pet")
+local DropsBox    = MainTab:AddLeftGroupbox("Auto Drops")
+local ShopBox     = MainTab:AddRightGroupbox("Seed Shop")
+local GearShopBox = MainTab:AddRightGroupbox("Gear Shop")
+local PlantBox    = MainTab:AddRightGroupbox("Auto Plant")
+
+-- ── Harvest ───────────────────────────────────
+HarvestBox:AddToggle("AutoHarvest", {
+    Text    = "Auto Harvest",
+    Default = false,
+    Tooltip = "Automatically harvests all ready crops",
+})
+
+HarvestBox:AddSlider("HarvestDelay", {
+    Text     = "Harvest Delay",
+    Default  = 0.15,
+    Min      = 0.05,
+    Max      = 1.0,
+    Rounding = 2,
+    Suffix   = "s",
+})
+
+local HarvestStatus = HarvestBox:AddLabel("Status: Idle")
+local HarvestCount  = HarvestBox:AddLabel("Harvested: 0")
+local harvestCount  = 0
+
+-- ── Sell ─────────────────────────────────────
+SellBox:AddToggle("AutoSell", {
+    Text    = "Auto Sell",
+    Default = false,
+    Tooltip = "Automatically sells full inventory",
+})
+
+SellBox:AddSlider("SellInterval", {
+    Text     = "Sell Interval",
+    Default  = 5,
+    Min      = 1,
+    Max      = 60,
+    Rounding = 0,
+    Suffix   = "s",
+})
+
+local SellStatus = SellBox:AddLabel("Status: Idle")
+local SellCount  = SellBox:AddLabel("Sells: 0")
+local sellCount  = 0
+
+-- ── Seed Shop ────────────────────────────────
+ShopBox:AddDropdown("ShopSeeds", {
+    Text     = "Seeds to Buy",
+    Values   = SEEDS,
+    Multi    = true,
+    Default  = 1,
+    Tooltip  = "Pick one or more seeds to auto-buy",
+})
+
+ShopBox:AddSlider("BuyInterval", {
+    Text     = "Buy Interval",
+    Default  = 1,
+    Min      = 0.1,
+    Max      = 30,
+    Rounding = 1,
+    Suffix   = "s",
+})
+
+ShopBox:AddToggle("AutoBuy", {
+    Text    = "Auto Buy",
+    Default = false,
+    Tooltip = "Continuously buys all selected seeds",
+})
+
+local BuyStatus = ShopBox:AddLabel("Status: Idle")
+local BuyCount  = ShopBox:AddLabel("Bought: 0")
+local buyCount  = 0
+
+-- ── Gear Shop ────────────────────────────────
+GearShopBox:AddDropdown("ShopGear", {
+    Text    = "Gear to Buy",
+    Values  = GEAR,
+    Multi   = true,
+    Default = 1,
+    Tooltip = "Pick one or more gear items to auto-buy",
+})
+
+GearShopBox:AddSlider("GearBuyInterval", {
+    Text     = "Buy Interval",
+    Default  = 1,
+    Min      = 0.1,
+    Max      = 30,
+    Rounding = 1,
+    Suffix   = "s",
+})
+
+GearShopBox:AddToggle("AutoBuyGear", {
+    Text    = "Auto Buy Gear",
+    Default = false,
+    Tooltip = "Continuously buys all selected gear",
+})
+
+local GearBuyStatus = GearShopBox:AddLabel("Status: Idle")
+local GearBuyCount  = GearShopBox:AddLabel("Bought: 0")
+local gearBuyCount  = 0
+
+-- ── Auto Plant ───────────────────────────────
+PlantBox:AddDropdown("PlantSeeds", {
+    Text     = "Seeds to Plant",
+    Values   = SEEDS,
+    Multi    = true,
+    Default  = 1,
+    Tooltip  = "Pick which seeds to plant (matched against your backpack)",
+})
+
+PlantBox:AddSlider("PlantDelay", {
+    Text     = "Plant Delay",
+    Default  = 0.07,
+    Min      = 0.05,
+    Max      = 1.0,
+    Rounding = 2,
+    Suffix   = "s",
+    Tooltip  = "Delay between each plant (0.05 = server rate limit floor)",
+})
+
+PlantBox:AddToggle("AutoPlant", {
+    Text    = "Auto Plant",
+    Default = false,
+    Tooltip = "Plants selected seeds at random points on your plot (no need to hold them)",
+})
+
+local PlantStatus = PlantBox:AddLabel("Status: Idle")
+local PlantCount  = PlantBox:AddLabel("Planted: 0")
+local plantCount  = 0
+
+-- ── Auto Pet ──────────────────────────────────
+PetBox:AddDropdown("PetTypes", {
+    Text     = "Pets to Buy",
+    Values   = PETS,
+    Multi    = true,
+    Default  = 1,
+    Tooltip  = "Pick which wild pet types to auto-buy (leave as-is to buy all)",
+})
+
+PetBox:AddToggle("BuyAllPets", {
+    Text    = "Buy All Pet Types",
+    Default = true,
+    Tooltip = "Ignore the dropdown and buy every wild pet that spawns",
+})
+
+PetBox:AddSlider("PetDelay", {
+    Text     = "Pet Delay",
+    Default  = 0.2,
+    Min      = 0.05,
+    Max      = 2.0,
+    Rounding = 2,
+    Suffix   = "s",
+    Tooltip  = "Delay between each pet buy attempt",
+})
+
+PetBox:AddToggle("AutoPet", {
+    Text    = "Auto Buy Pets",
+    Default = false,
+    Tooltip = "Teleports to each wild pet, buys it, then returns you",
+})
+
+PetBox:AddToggle("PetReturn", {
+    Text    = "Return After Buying",
+    Default = true,
+    Tooltip = "Snap back to your start position after each buy pass",
+})
+
+local PetStatus = PetBox:AddLabel("Status: Idle")
+local PetCount  = PetBox:AddLabel("Pets: 0")
+local petCount  = 0
+
+-- ── Auto Drops ───────────────────────────────
+DropsBox:AddSlider("DropsDelay", {
+    Text     = "Collect Delay",
+    Default  = 0.15,
+    Min      = 0.05,
+    Max      = 2.0,
+    Rounding = 2,
+    Suffix   = "s",
+    Tooltip  = "Delay between teleporting to each drop",
+})
+
+DropsBox:AddToggle("DropsReturn", {
+    Text    = "Return After Collecting",
+    Default = true,
+    Tooltip = "Snap back to your start position after each sweep",
+})
+
+DropsBox:AddToggle("AutoDrops", {
+    Text    = "Auto Collect Drops",
+    Default = false,
+    Tooltip = "Teleports to and collects DroppedItems and SeedPack spawns",
+})
+
+local DropsStatus = DropsBox:AddLabel("Status: Idle")
+local DropsCount  = DropsBox:AddLabel("Collected: 0")
+local dropCount   = 0
+
+-- =============================================
+--  MAILBOX TAB
+-- =============================================
+local MailTab    = Window:AddTab("Mailbox", "mail")
+local MailBox     = MailTab:AddLeftGroupbox("Send Gifts")
+local MailCatBox  = MailTab:AddRightGroupbox("What to Send")
+
+MailBox:AddInput("MailTarget", {
+    Text        = "Recipient Username",
+    Default     = "",
+    Placeholder = "username (not display name)",
+    Numeric     = false,
+    Finished    = false,
+    Tooltip     = "Exact Roblox username to send gifts to",
+})
+
+MailBox:AddInput("MailNote", {
+    Text        = "Note (optional)",
+    Default     = "",
+    Placeholder = "optional message",
+    Numeric     = false,
+    Finished    = false,
+})
+
+MailBox:AddSlider("MailInterval", {
+    Text     = "Send Interval",
+    Default  = 2,
+    Min      = 1.5,
+    Max      = 15,
+    Rounding = 1,
+    Suffix   = "s",
+    Tooltip  = "Time between batches (server cooldown is 1.5s)",
+})
+
+local MailStatus = MailBox:AddLabel("Status: Idle")
+local MailCountL = MailBox:AddLabel("Sent: 0")
+local mailSent   = 0
+
+MailBox:AddButton({
+    Text = "Send Once",
+    Func = function()
+        _G._gag_mail_once = true
+    end,
+})
+
+MailBox:AddToggle("AutoMail", {
+    Text    = "Auto Send",
+    Default = false,
+    Tooltip = "Continuously sends your inventory (20 items/batch) until empty",
+})
+
+MailCatBox:AddDropdown("MailCats", {
+    Text    = "Categories",
+    Values  = GIFTABLE_CATEGORIES,
+    Multi   = true,
+    Default = 1,
+    Tooltip = "Which item categories to send",
+})
+
+MailCatBox:AddToggle("MailAllCats", {
+    Text    = "Send All Categories",
+    Default = true,
+    Tooltip = "Ignore the dropdown and send everything giftable",
+})
+
+MailCatBox:AddToggle("MailSkipPets", {
+    Text    = "Skip Pets",
+    Default = true,
+    Tooltip = "Don't send pets (safety so you don't gift away pets by accident)",
+})
+
+-- =============================================
+--  SETTINGS TAB
+-- =============================================
+local SettingsTab = Window:AddTab("Settings", "settings")
+local ThemeBox    = SettingsTab:AddLeftGroupbox("Theme")
+local AntiAfkBox  = SettingsTab:AddLeftGroupbox("Anti-AFK")
+
+AntiAfkBox:AddToggle("AntiAfk", {
+    Text    = "Anti-AFK",
+    Default = true,
+    Tooltip = "Stops the game from hopping you to a new server when idle",
+})
+
+AntiAfkBox:AddButton({
+    Text    = "Hop Server",
+    Tooltip = "Immediately hops you to a new server",
+    Func    = function()
+        pcall(function()
+            Networking.AntiAfk.RequestHop:Fire()
+        end)
+    end,
+})
+
+local AntiAfkStatus = AntiAfkBox:AddLabel("Status: On")
+
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetFolder("GrowAGarden")
+ThemeManager:ApplyToGroupbox(ThemeBox)
+SaveManager:BuildConfigSection(SettingsTab)
+SaveManager:LoadAutoloadConfig()
+
+-- =============================================
+--  PLOT HELPER
+-- =============================================
+local function getMyPlot()
+    local plotId  = player:GetAttribute("PlotId")
+    local gardens = workspace:FindFirstChild("Gardens")
+    if not gardens then return nil end
+
+    if plotId then
+        local p = gardens:FindFirstChild("Plot" .. tostring(plotId))
+        if p then return p end
+    end
+
+    for _, plot in ipairs(gardens:GetChildren()) do
+        local plants = plot:FindFirstChild("Plants")
+        if plants then
+            for _, pf in ipairs(plants:GetChildren()) do
+                if pf.Name:sub(1, #uid) == uid then
+                    return plot
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+-- =============================================
+--  SEED TOOL HELPER
+-- =============================================
+local function getSeedToolMatching(wanted)
+    local function scan(container)
+        if not container then return nil end
+        for _, t in ipairs(container:GetChildren()) do
+            if t:IsA("Tool") then
+                local seedType = t:GetAttribute("SeedTool")
+                if seedType ~= nil then
+                    if not wanted or not next(wanted) then
+                        return t, seedType
+                    end
+                    if wanted[tostring(seedType)] then
+                        return t, seedType
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local char = player.Character
+    local t, seedType = scan(char)
+    if t then return t, seedType end
+
+    local bp = player:FindFirstChildOfClass("Backpack")
+    return scan(bp)
+end
+
+-- =============================================
+--  PLANT AREA HELPER
+-- =============================================
+local function getPlantAreas(plot)
+    local areas = {}
+    local visual = plot:FindFirstChild("Visual")
+    if not visual then return areas end
+
+    for _, child in ipairs(visual:GetChildren()) do
+        if child:IsA("BasePart") and child.Name:find("PlantAreaColumn") then
+            table.insert(areas, child)
+        end
+    end
+    return areas
+end
+
+local function randomPointOnPart(part)
+    local size = part.Size
+    local offX = (math.random() - 0.5) * size.X
+    local offZ = (math.random() - 0.5) * size.Z
+    local localPoint = Vector3.new(offX, size.Y / 2, offZ)
+    return part.CFrame:PointToWorldSpace(localPoint)
+end
+
+-- =============================================
+--  HARVEST LOGIC
+-- =============================================
+local function harvestAll()
+    local gardens = workspace:FindFirstChild("Gardens")
+    if not gardens then
+        HarvestStatus:SetText("Status: No Gardens found")
+        return
+    end
+
+    local triggered = 0
+
+    for _, plot in ipairs(gardens:GetChildren()) do
+        local plants = plot:FindFirstChild("Plants")
+        if not plants then continue end
+
+        for _, playerFolder in ipairs(plants:GetChildren()) do
+            if playerFolder.Name:sub(1, #uid) ~= uid then continue end
+
+            for _, desc in ipairs(playerFolder:GetDescendants()) do
+                if not Alive() or not Toggles.AutoHarvest.Value then
+                    HarvestCount:SetText("Harvested: " .. harvestCount)
+                    return
+                end
+
+                if desc:IsA("ProximityPrompt") then
+                    pcall(function() fireproximityprompt(desc) end)
+                    triggered    = triggered + 1
+                    harvestCount = harvestCount + 1
+                    task.wait(Options.HarvestDelay.Value)
+                end
+            end
+        end
+    end
+
+    if triggered > 0 then
+        HarvestStatus:SetText("Status: Got " .. triggered .. " crops")
+    else
+        HarvestStatus:SetText("Status: Nothing ready")
+    end
+    HarvestCount:SetText("Harvested: " .. harvestCount)
+end
+
+-- =============================================
+--  SELL LOGIC
+-- =============================================
+local function trySell()
+    local preview = nil
+    pcall(function()
+        preview = Networking.NPCS.PreviewSellAll:Fire()
+    end)
+
+    if not preview then
+        SellStatus:SetText("Status: Preview failed")
+        return
+    end
+
+    local fruitCount = preview.FruitCount or 0
+    if fruitCount == 0 then
+        SellStatus:SetText("Status: Nothing to sell")
+        return
+    end
+
+    local result = nil
+    pcall(function()
+        result = Networking.NPCS.SellAll:Fire()
+    end)
+
+    if result and result.Success then
+        sellCount = sellCount + 1
+        SellStatus:SetText(string.format("Status: Sold %d items", result.SoldCount or fruitCount))
+        SellCount:SetText("Sells: " .. sellCount)
+    else
+        SellStatus:SetText("Status: Failed / cooldown")
+    end
+end
+
+-- =============================================
+--  BUY LOGIC (Seed Shop)
+--  One seed per tick to avoid coroutine spam.
+-- =============================================
+local _seedBuyList  = {}
+local _seedBuyIndex = 1
+
+local function tryBuy()
+    local selected = Options.ShopSeeds.Value
+    if not selected or not next(selected) then
+        BuyStatus:SetText("Status: No seeds selected")
+        return
+    end
+
+    _seedBuyList = {}
+    for seed, active in pairs(selected) do
+        if active then table.insert(_seedBuyList, seed) end
+    end
+    if #_seedBuyList == 0 then return end
+
+    if _seedBuyIndex > #_seedBuyList then _seedBuyIndex = 1 end
+    local seed = _seedBuyList[_seedBuyIndex]
+    _seedBuyIndex = _seedBuyIndex + 1
+
+    local ok = pcall(function()
+        Networking.SeedShop.PurchaseSeed:Fire(seed)
+    end)
+
+    if ok then
+        buyCount = buyCount + 1
+        BuyStatus:SetText("Status: Bought " .. seed)
+        BuyCount:SetText("Bought: " .. buyCount)
+    else
+        BuyStatus:SetText("Status: Failed / cooldown")
+    end
+end
+
+-- =============================================
+--  BUY LOGIC (Gear Shop)
+--  Buys ONE item per call so the yielding Packet coroutine
+--  fully resolves before the next fire (avoids "cannot resume
+--  non-suspended coroutine" spam). The outer loop handles pacing.
+-- =============================================
+local _gearBuyList  = {}  -- ordered list of currently-selected gear
+local _gearBuyIndex = 1   -- cycles through the list one item per tick
+
+local function tryBuyGear()
+    local selected = Options.ShopGear.Value
+    if not selected or not next(selected) then
+        GearBuyStatus:SetText("Status: No gear selected")
+        return
+    end
+
+    -- Rebuild list whenever selection may have changed
+    _gearBuyList = {}
+    for gear, active in pairs(selected) do
+        if active then table.insert(_gearBuyList, gear) end
+    end
+    if #_gearBuyList == 0 then return end
+
+    -- Clamp index and advance for next call
+    if _gearBuyIndex > #_gearBuyList then _gearBuyIndex = 1 end
+    local gear = _gearBuyList[_gearBuyIndex]
+    _gearBuyIndex = _gearBuyIndex + 1
+
+    local ok = pcall(function()
+        Networking.GearShop.PurchaseGear:Fire(gear)
+    end)
+
+    if ok then
+        gearBuyCount = gearBuyCount + 1
+        GearBuyStatus:SetText("Status: Bought " .. gear)
+        GearBuyCount:SetText("Bought: " .. gearBuyCount)
+    else
+        GearBuyStatus:SetText("Status: Failed / cooldown")
+    end
+end
+
+-- =============================================
+--  PLANT LOGIC
+-- =============================================
+local function tryPlant()
+    local plot = getMyPlot()
+    if not plot then
+        PlantStatus:SetText("Status: No plot found")
+        return
+    end
+
+    local wanted = Options.PlantSeeds.Value
+    local tool, seedType = getSeedToolMatching(wanted)
+    if not tool then
+        PlantStatus:SetText("Status: No matching seed in bag")
+        return
+    end
+
+    local areas = getPlantAreas(plot)
+    if #areas == 0 then
+        PlantStatus:SetText("Status: No PlantAreaColumn found")
+        return
+    end
+
+    local area = areas[math.random(1, #areas)]
+    local pos  = randomPointOnPart(area)
+
+    local ok = pcall(function()
+        Networking.Plant.PlantSeed:Fire(pos, seedType, tool)
+    end)
+
+    if ok then
+        plantCount = plantCount + 1
+        PlantStatus:SetText("Status: Planted " .. tostring(seedType))
+        PlantCount:SetText("Planted: " .. plantCount)
+    else
+        PlantStatus:SetText("Status: Fire error")
+    end
+end
+
+-- =============================================
+--  PET BUY LOGIC (hardened)
+-- =============================================
+local function petTypeFromName(name)
+    local t = name:match("^WildPet_([%w]+)_")
+    return t
+end
+
+local function getRoot()
+    local char = player.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+end
+
+local function collectPetPrompts()
+    local ok, list, errMsg = pcall(function()
+        local map = workspace:FindFirstChild("Map")
+        local spawns = map and map:FindFirstChild("WildPetSpawns")
+        if not spawns then return nil, "No WildPetSpawns" end
+
+        local wanted = Options.PetTypes.Value
+        local buyAll = Toggles.BuyAllPets.Value
+
+        local out = {}
+        for _, prompt in ipairs(spawns:GetDescendants()) do
+            if prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                local action = (prompt.ActionText or ""):lower()
+                if action == "" or action:find("buy") then
+                    local owner = prompt:FindFirstAncestorWhichIsA("Model")
+                    local part = owner and (owner.PrimaryPart
+                        or owner:FindFirstChild("HumanoidRootPart")
+                        or owner:FindFirstChildWhichIsA("BasePart"))
+                    if part then
+                        local pType = petTypeFromName(owner.Name)
+                        local allow = buyAll
+                        if not buyAll and pType and wanted and wanted[pType] then
+                            allow = true
+                        end
+                        if allow then
+                            table.insert(out, { prompt = prompt, part = part, ptype = pType })
+                        end
+                    end
+                end
+            end
+        end
+        return out, nil
+    end)
+
+    if not ok then
+        return nil, "Scan error"
+    end
+    if list == nil then
+        return nil, errMsg or "Unknown error"
+    end
+    return list
+end
+
+-- Fire a pet-buy prompt with retries, just like guaranteedFire in collectDrops
+local function buyOnePet(entry)
+    local prompt = entry.prompt
+    local part   = entry.part
+
+    if not prompt or not prompt.Parent or not part or not part.Parent then
+        return false
+    end
+
+    -- Re-fetch root right before teleporting (handles respawn mid-loop)
+    local r = getRoot()
+    if not r then return false end
+
+    pcall(function()
+        r.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+    end)
+    task.wait(0.12)
+
+    if not prompt.Parent then return false end
+
+    local oldHold = prompt.HoldDuration
+    pcall(function() prompt.HoldDuration = 0 end)
+
+    local fired = false
+    for attempt = 1, 3 do
+        if not prompt.Parent then break end
+        local fireOk = pcall(function() fireproximityprompt(prompt) end)
+        if fireOk then
+            fired = true
+            break
+        end
+        task.wait(0.05)
+    end
+
+    pcall(function()
+        if prompt and prompt.Parent then prompt.HoldDuration = oldHold end
+    end)
+
+    return fired
+end
+
+local function tryBuyPets()
+    local root = getRoot()
+    if not root then
+        PetStatus:SetText("Status: No character")
+        return
+    end
+
+    -- Capture return position FIRST, before anything that can yield/error
+    local returnCF = root.CFrame
+
+    -- Guaranteed return helper, mirrors alwaysReturn() in collectDrops
+    local function alwaysReturnPet()
+        if not Toggles.PetReturn.Value then return end
+        for _ = 1, 3 do
+            local r = getRoot()
+            if r then
+                pcall(function() r.CFrame = returnCF end)
+            end
+            task.wait(0.05)
+        end
+    end
+
+    local list, err = collectPetPrompts()
+    if not list then
+        PetStatus:SetText("Status: " .. tostring(err))
+        return
+    end
+
+    if #list == 0 then
+        PetStatus:SetText("Status: No pets around")
+        return
+    end
+
+    table.sort(list, function(a, b)
+        return (a.part.Position - returnCF.Position).Magnitude
+             < (b.part.Position - returnCF.Position).Magnitude
+    end)
+
+    local entry = list[1]
+    PetStatus:SetText("Status: Buying " .. (entry.ptype or "pet"))
+
+    -- Wrap the whole attempt so a mid-buy error can't skip the return teleport
+    local bought = false
+    pcall(function()
+        bought = buyOnePet(entry)
+    end)
+
+    if bought then
+        petCount = petCount + 1
+        PetCount:SetText("Pets: " .. petCount)
+        PetStatus:SetText("Status: Bought " .. (entry.ptype or "pet"))
+    else
+        PetStatus:SetText("Status: Buy failed, will retry")
+    end
+
+    alwaysReturnPet()
+end
+
+-- =============================================
+--  AUTO DROPS LOGIC
+--  Bulletproof: captures returnCF first, wraps entire sweep in pcall,
+--  retries each prompt up to 3x, and ALWAYS teleports back no matter
+--  what error or break happens.
+-- =============================================
+local function collectDrops()
+    local root = getRoot()
+    if not root then
+        DropsStatus:SetText("Status: No character")
+        return
+    end
+
+    -- Capture return position FIRST before any yields or errors can happen
+    local returnCF = root.CFrame
+
+    -- Guaranteed return helper — called in every exit path
+    local function alwaysReturn()
+        local r = getRoot()
+        if r then
+            -- retry the teleport a few times in case the character is mid-animation
+            for _ = 1, 3 do
+                pcall(function() r.CFrame = returnCF end)
+                task.wait(0.05)
+            end
+        end
+    end
+
+    -- Scan a container for all enabled ProximityPrompts
+    local function scanContainer(container, out)
+        if not container then return end
+        for _, desc in ipairs(container:GetDescendants()) do
+            if desc:IsA("ProximityPrompt") and desc.Enabled then
+                local part = desc.Parent
+                if not (part and part:IsA("BasePart")) then
+                    part = desc:FindFirstAncestorWhichIsA("BasePart")
+                end
+                if part then
+                    table.insert(out, { prompt = desc, part = part })
+                end
+            end
+        end
+    end
+
+    -- Fire one prompt with retries — zeros hold duration, fires up to 3 attempts
+    local function guaranteedFire(prompt)
+        if not prompt or not prompt.Parent then return false end
+
+        local oldHold = 0
+        pcall(function()
+            oldHold = prompt.HoldDuration
+            prompt.HoldDuration = 0
+        end)
+
+        local fired = false
+        for attempt = 1, 3 do
+            if not prompt.Parent then break end
+            local ok = pcall(function() fireproximityprompt(prompt) end)
+            if ok then
+                fired = true
+                break
+            end
+            task.wait(0.05)
+        end
+
+        pcall(function()
+            if prompt and prompt.Parent then
+                prompt.HoldDuration = oldHold
+            end
+        end)
+
+        return fired
+    end
+
+    -- Wrap entire sweep so errors never skip the return
+    local collected = 0
+    pcall(function()
+        local prompts = {}
+        scanContainer(workspace:FindFirstChild("DroppedItems"), prompts)
+        local map = workspace:FindFirstChild("Map")
+        if map then
+            scanContainer(map:FindFirstChild("SeedPackSpawnClient"), prompts)
+            scanContainer(map:FindFirstChild("SeedPackSpawnServerLocations"), prompts)
+        end
+
+        if #prompts == 0 then
+            DropsStatus:SetText("Status: Nothing to collect")
+            return
+        end
+
+        -- Nearest-first to minimise travel
+        table.sort(prompts, function(a, b)
+            return (a.part.Position - returnCF.Position).Magnitude
+                 < (b.part.Position - returnCF.Position).Magnitude
+        end)
+
+for _, entry in ipairs(prompts) do
+    if not Alive() or not Toggles.AutoDrops.Value then break end
+
+    local prompt = entry.prompt
+    local part   = entry.part
+
+    if not prompt or not prompt.Parent or not part or not part.Parent then
+        continue
+    end
+
+    -- Re-fetch root each loop in case character respawned mid-sweep
+    local r = getRoot()
+    if not r then break end
+
+    r.CFrame = CFrame.new(part.Position + Vector3.new(0, 2, 0))
+    task.wait(0.15)
+
+    local fired = guaranteedFire(prompt)
+
+            if fired then
+                collected = collected + 1
+                dropCount = dropCount + 1
+                DropsCount:SetText("Collected: " .. dropCount)
+                DropsStatus:SetText("Status: Collecting... (" .. collected .. ")")
+            end
+
+            task.wait(Options.DropsDelay.Value)
+        end
+
+        if collected > 0 then
+            DropsStatus:SetText("Status: Got " .. collected .. " drop(s)")
+        else
+            DropsStatus:SetText("Status: Nothing collected")
+        end
+    end)
+
+    -- ALWAYS return — runs even if pcall caught an error or toggle was flipped
+    alwaysReturn()
+end
+-- =============================================
+local mailUserCache = {}
+
+local function lookupUser(username)
+    local key = username:lower()
+    if mailUserCache[key] then return mailUserCache[key] end
+
+    local ok, id = pcall(function()
+        return Networking.Mailbox.LookupPlayer:Fire(username)
+    end)
+    if ok and typeof(id) == "number" and id > 0 then
+        mailUserCache[key] = id
+        return id
+    end
+    return nil
+end
+
+local function buildMailBatch()
+    local items = {}
+    if not PlayerStateClient then return items, "No PlayerStateClient" end
+
+    local replica
+    pcall(function() replica = PlayerStateClient:GetLocalReplica() end)
+    local inv = replica and replica.Data and replica.Data.Inventory
+    if typeof(inv) ~= "table" then return items, "No inventory" end
+
+    local sendAll   = Toggles.MailAllCats.Value
+    local catFilter = Options.MailCats.Value
+    local skipPets  = Toggles.MailSkipPets.Value
+
+    local total = 0
+
+    for _, cat in ipairs(GIFTABLE_CATEGORIES) do
+        if total >= 20 then break end
+        if cat == "Pets" and skipPets then continue end
+        if not sendAll and not (catFilter and catFilter[cat]) then continue end
+
+        local catTable = inv[cat]
+        if typeof(catTable) ~= "table" then continue end
+
+        if cat == "Pets" or cat == "HarvestedFruits" then
+            for id, entry in pairs(catTable) do
+                if total >= 20 then break end
+                if typeof(entry) == "table" and entry.Id ~= nil then
+                    if not (cat == "Pets" and entry.Equipped == true) then
+                        table.insert(items, { Category = cat, ItemKey = id, Count = 1 })
+                        total = total + 1
+                    end
+                end
+            end
+        else
+            for itemKey, count in pairs(catTable) do
+                if total >= 20 then break end
+                if typeof(count) == "number" and count > 0 then
+                    local canAdd = math.min(count, 20 - total)
+                    if canAdd > 0 then
+                        table.insert(items, { Category = cat, ItemKey = itemKey, Count = canAdd })
+                        total = total + canAdd
+                    end
+                end
+            end
+        end
+    end
+
+    return items
+end
+
+local function sendMailOnce()
+    local username = (Options.MailTarget.Value or ""):gsub("^%s*@?(.-)%s*$", "%1")
+    if username == "" then
+        MailStatus:SetText("Status: No recipient")
+        return false
+    end
+
+    if #username < 3 or #username > 20 or not username:match("^[%w_]+$") then
+        MailStatus:SetText("Status: Bad username")
+        return false
+    end
+
+    MailStatus:SetText("Status: Looking up...")
+    local userId = lookupUser(username)
+    if not userId then
+        MailStatus:SetText("Status: User not found")
+        return false
+    end
+
+    local items = buildMailBatch()
+    if #items == 0 then
+        MailStatus:SetText("Status: Nothing to send")
+        return false
+    end
+
+    local note = Options.MailNote.Value or ""
+
+    local ok, success, msg = pcall(function()
+        return Networking.Mailbox.SendBatch:Fire(userId, items, note)
+    end)
+
+    if ok and success then
+        mailSent = mailSent + 1
+        MailCountL:SetText("Sent: " .. mailSent)
+        MailStatus:SetText("Status: Sent batch of " .. #items)
+        return true
+    else
+        MailStatus:SetText("Status: " .. (typeof(msg) == "string" and msg ~= "" and msg or "Send failed"))
+        return false
+    end
+end
+
+-- =============================================
+--  ANTI-AFK
+-- =============================================
+do
+    pcall(function()
+        local vu = game:GetService("VirtualUser")
+        player.Idled:Connect(function()
+            if not Toggles.AntiAfk.Value then return end
+            vu:CaptureController()
+            vu:ClickButton2(Vector2.new())
+        end)
+    end)
+
+    task.spawn(function()
+        local VIM = game:GetService("VirtualInputManager")
+        while Alive() do
+            if Toggles.AntiAfk.Value then
+                pcall(function()
+                    player:SetAttribute("AntiAfkIdleOverride", 1e9)
+                end)
+                pcall(function()
+                    VIM:SendKeyEvent(true,  Enum.KeyCode.Space, false, game)
+                    task.wait(0.05)
+                    VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+                end)
+                AntiAfkStatus:SetText("Status: On (idle blocked)")
+            else
+                pcall(function()
+                    player:SetAttribute("AntiAfkIdleOverride", 0)
+                end)
+                AntiAfkStatus:SetText("Status: Off")
+            end
+            task.wait(60)
+        end
+    end)
+end
+
+-- =============================================
+--  MAIN LOOPS
+-- =============================================
+task.spawn(function()
+    while Alive() do
+        if Toggles.AutoHarvest.Value then
+            harvestAll()
+        else
+            HarvestStatus:SetText("Status: Idle")
+        end
+        task.wait(0.5)
+    end
+end)
+
+task.spawn(function()
+    while Alive() do
+        if Toggles.AutoSell.Value then
+            trySell()
+            task.wait(math.max(1, Options.SellInterval.Value))
+        else
+            SellStatus:SetText("Status: Idle")
+            task.wait(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    while Alive() do
+        if Toggles.AutoBuy.Value then
+            tryBuy()
+            task.wait(math.max(0.1, Options.BuyInterval.Value))
+        else
+            BuyStatus:SetText("Status: Idle")
+            task.wait(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    while Alive() do
+        if Toggles.AutoBuyGear.Value then
+            tryBuyGear()
+            task.wait(math.max(0.1, Options.GearBuyInterval.Value))
+        else
+            GearBuyStatus:SetText("Status: Idle")
+            task.wait(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    while Alive() do
+        if Toggles.AutoPlant.Value then
+            tryPlant()
+            task.wait(math.max(0.05, Options.PlantDelay.Value))
+        else
+            PlantStatus:SetText("Status: Idle")
+            task.wait(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    while Alive() do
+        if Toggles.AutoPet.Value then
+            tryBuyPets()
+            task.wait(math.max(0.1, Options.PetDelay.Value))
+        else
+            PetStatus:SetText("Status: Idle")
+            task.wait(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    while Alive() do
+        if Toggles.AutoDrops.Value then
+            collectDrops()
+            task.wait(1) -- brief pause between full sweeps
+        else
+            DropsStatus:SetText("Status: Idle")
+            task.wait(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    while Alive() do
+        if _G._gag_mail_once then
+            _G._gag_mail_once = false
+            sendMailOnce()
+            task.wait(1.6)
+        end
+
+        if Toggles.AutoMail.Value then
+            local sent = sendMailOnce()
+            if sent then
+                task.wait(math.max(1.6, Options.MailInterval.Value))
+            else
+                task.wait(2)
+            end
+        else
+            if not _G._gag_mail_once then
+                MailStatus:SetText("Status: Idle")
+            end
+            task.wait(0.5)
+        end
+    end
+end)
+
+-- =============================================
+--  STOP FUNCTION
+-- =============================================
+_G._gag_stop = function()
+    _alive = false
+    _G._gag_mail_once = false
+    pcall(function() player:SetAttribute("AntiAfkIdleOverride", 0) end)
+    pcall(function() Library:Unload() end)
+end
