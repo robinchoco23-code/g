@@ -94,6 +94,26 @@ local GEAR = {
 }
 
 -- =============================================
+--  CRATE LIST  (Prop Shop — crates that open into props)
+-- =============================================
+local CRATES = {
+    "Ladder Crate",
+    "Bench Crate",
+    "Light Crate",
+    "Sign Crate",
+    "Arch Crate",
+    "Roleplay Crate",
+    "Bridge Crate",
+    "Spring Crate",
+    "Seesaw Crate",
+    "Conveyor Crate",
+    "Owner Door Crate",
+    "Bear Trap Crate",
+    "Fence Crate",
+    "Teleporter Pad Crate",
+}
+
+-- =============================================
 --  PET LIST  (matched against WildPet_<Type>_WildPet_<id> model names)
 -- =============================================
 local PETS = {
@@ -125,6 +145,7 @@ local PetBox      = MainTab:AddLeftGroupbox("Auto Pet")
 local DropsBox    = MainTab:AddLeftGroupbox("Auto Drops")
 local ShopBox     = MainTab:AddRightGroupbox("Seed Shop")
 local GearShopBox = MainTab:AddRightGroupbox("Gear Shop")
+local CrateShopBox = MainTab:AddRightGroupbox("Prop / Crate Shop")
 local PlantBox    = MainTab:AddRightGroupbox("Auto Plant")
 
 -- ── Harvest ───────────────────────────────────
@@ -172,6 +193,21 @@ GearShopBox:AddToggle("AutoBuyGear", {
     Tooltip = "Continuously buys all selected gear that is in stock",
 })
 local GearBuyStatus = GearShopBox:AddLabel("Status: Idle")
+
+-- ── Prop / Crate Shop ────────────────────────
+CrateShopBox:AddDropdown("ShopCrates", {
+    Text    = "Crates to Buy",
+    Values  = CRATES,
+    Multi   = true,
+    Default = 1,
+    Tooltip = "Pick one or more crates to auto-buy (crates open into props)",
+})
+CrateShopBox:AddToggle("AutoBuyCrate", {
+    Text    = "Auto Buy Crates",
+    Default = false,
+    Tooltip = "Continuously buys all selected crates that are in stock",
+})
+local CrateBuyStatus = CrateShopBox:AddLabel("Status: Idle")
 
 -- ── Auto Plant ───────────────────────────────
 PlantBox:AddDropdown("PlantSeeds", {
@@ -356,6 +392,10 @@ ShopTimings:AddSlider("BuyInterval", {
 ShopTimings:AddSlider("GearBuyInterval", {
     Text = "Gear Buy Interval", Default = 1, Min = 0.1, Max = 30,
     Rounding = 1, Suffix = "s", Tooltip = "Time between gear buys",
+})
+ShopTimings:AddSlider("CrateBuyInterval", {
+    Text = "Crate Buy Interval", Default = 1, Min = 0.1, Max = 30,
+    Rounding = 1, Suffix = "s", Tooltip = "Time between crate buys",
 })
 ShopTimings:AddSlider("SellInterval", {
     Text = "Sell Interval", Default = 5, Min = 1, Max = 60,
@@ -679,6 +719,54 @@ local function tryBuyGear()
         GearBuyStatus:SetText("Status: Bought " .. gear)
     else
         GearBuyStatus:SetText("Status: Failed / cooldown")
+    end
+end
+
+-- =============================================
+--  BUY LOGIC (Prop / Crate Shop) — skips out-of-stock crates
+-- =============================================
+local _crateBuyList  = {}
+local _crateBuyIndex = 1
+
+local function tryBuyCrate()
+    local selected = Options.ShopCrates.Value
+    if not selected or not next(selected) then
+        CrateBuyStatus:SetText("Status: No crates selected")
+        return
+    end
+
+    _crateBuyList = {}
+    for crate, active in pairs(selected) do
+        if active then table.insert(_crateBuyList, crate) end
+    end
+    if #_crateBuyList == 0 then return end
+
+    local tries = 0
+    local crate = nil
+    while tries < #_crateBuyList do
+        if _crateBuyIndex > #_crateBuyList then _crateBuyIndex = 1 end
+        local candidate = _crateBuyList[_crateBuyIndex]
+        _crateBuyIndex = _crateBuyIndex + 1
+        tries = tries + 1
+        if inStock("CrateShop", candidate) then
+            crate = candidate
+            break
+        end
+    end
+
+    if not crate then
+        CrateBuyStatus:SetText("Status: All out of stock")
+        return
+    end
+
+    local ok = pcall(function()
+        Networking.CrateShop.PurchaseCrate:Fire(crate)
+    end)
+
+    if ok then
+        CrateBuyStatus:SetText("Status: Bought " .. crate)
+    else
+        CrateBuyStatus:SetText("Status: Failed / cooldown")
     end
 end
 
@@ -1227,6 +1315,18 @@ task.spawn(function()
             task.wait(math.max(0.1, Options.GearBuyInterval.Value))
         else
             GearBuyStatus:SetText("Status: Idle")
+            task.wait(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    while Alive() do
+        if Toggles.AutoBuyCrate.Value then
+            tryBuyCrate()
+            task.wait(math.max(0.1, Options.CrateBuyInterval.Value))
+        else
+            CrateBuyStatus:SetText("Status: Idle")
             task.wait(0.5)
         end
     end
