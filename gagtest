@@ -510,6 +510,15 @@ local function getSeedToolMatching(wanted)
 end
 
 -- =============================================
+--  SHARED CHARACTER HELPER  (defined early so plant helpers can use it)
+-- =============================================
+local function getRoot()
+    local char = player.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+end
+
+-- =============================================
 --  PLANT AREA HELPER
 -- =============================================
 local function getPlantAreas(plot)
@@ -531,36 +540,30 @@ local function randomPointOnPart(part)
     return part.CFrame:PointToWorldSpace(Vector3.new(offX, size.Y / 2, offZ))
 end
 
--- True if world XZ (x,z) sits inside this part's footprint (handles rotation).
-local function xzInsidePart(part, x, z)
-    local rel = part.CFrame:PointToObjectSpace(Vector3.new(x, part.Position.Y, z))
-    return math.abs(rel.X) <= part.Size.X / 2
-       and math.abs(rel.Z) <= part.Size.Z / 2
-end
-
--- Pick a point in a ring around the player (minDist..radius) that still lands
--- on a valid plant area, so seeds plant near you but never directly on you.
+-- Pick a point on a valid plant area that is within `radius` of the player
+-- (and at least minDist away, so it's never on top of you). We sample real
+-- on-plot points via randomPointOnPart — points the server already accepts —
+-- and keep the first one that falls inside the ring. Returns nil if the player
+-- is too far from any plant area for the radius to reach.
 local function pointNearPlayer(areas, radius)
     local root = getRoot()
     if not root then return nil end
 
     local origin  = root.Position
-    local minDist = 5                      -- never plant on top of the player
+    local minDist = 5
     if radius <= minDist then radius = minDist + 1 end
 
-    for _ = 1, 24 do
-        local ang  = math.random() * 2 * math.pi
-        local dist = minDist + math.random() * (radius - minDist)
-        local x = origin.X + math.cos(ang) * dist
-        local z = origin.Z + math.sin(ang) * dist
-        for _, area in ipairs(areas) do
-            if xzInsidePart(area, x, z) then
-                local topY = area.Position.Y + area.Size.Y / 2
-                return Vector3.new(x, topY, z)
-            end
+    for _ = 1, 40 do
+        local area = areas[math.random(1, #areas)]
+        local p = randomPointOnPart(area)
+        -- horizontal distance from the player
+        local dx, dz = p.X - origin.X, p.Z - origin.Z
+        local flat = math.sqrt(dx * dx + dz * dz)
+        if flat >= minDist and flat <= radius then
+            return p
         end
     end
-    return nil  -- no valid spot found in range
+    return nil
 end
 
 -- =============================================
@@ -596,74 +599,37 @@ local function inStock(shopGuiName, itemName)
 end
 
 -- =============================================
---  HARVEST LOGIC  (indexed — no GetDescendants on a timer)
---  We scan the plant folder ONCE, cache every ProximityPrompt in a
---  table, and keep it current via DescendantAdded/Removing. The per-tick
---  harvest then just walks the cached table, allocating nothing.
+--  HARVEST LOGIC
+--  Scans live each sweep (sees ready crops immediately, like the original),
+--  but collects enabled prompts into a REUSED array first. The fire loop then
+--  walks that array — so we never iterate a structure that the game mutates
+--  during our task.wait() yields, which is what caused "invalid key to 'next'".
+--  Only the collect pass touches the world; it does not yield.
 -- =============================================
-local harvestPrompts = {}   -- [ProximityPrompt] = true
-local boundPlants
-local harvestConns = {}
-
-local function bindHarvest()
-    local plot   = getMyPlot()
-    local plants = plot and plot:FindFirstChild("Plants")
-    if not plants then return false end
-    if plants == boundPlants then return true end
-
-    -- rebind to a new/changed Plants folder
-    for _, c in ipairs(harvestConns) do pcall(function() c:Disconnect() end) end
-    table.clear(harvestConns)
-    table.clear(harvestPrompts)
-    boundPlants = plants
-
-    for _, pf in ipairs(plants:GetChildren()) do
-        if pf.Name:sub(1, #uid) == uid then
-            for _, d in ipairs(pf:GetDescendants()) do
-                if d:IsA("ProximityPrompt") then harvestPrompts[d] = true end
-            end
-        end
-    end
-
-    harvestConns[#harvestConns + 1] = plants.DescendantAdded:Connect(function(d)
-        if d:IsA("ProximityPrompt") then
-            local pf = d:FindFirstAncestorWhichIsA("Folder")
-            -- accept anything under our owned subfolders
-            if d:FindFirstAncestor(uid) or (pf and pf.Name:sub(1, #uid) == uid) then
-                harvestPrompts[d] = true
-            else
-                harvestPrompts[d] = true -- plot is ours; keep simple
-            end
-        end
-    end)
-    harvestConns[#harvestConns + 1] = plants.DescendantRemoving:Connect(function(d)
-        harvestPrompts[d] = nil
-    end)
-
-    return true
-end
-
-local _harvestScratch = {}  -- reused snapshot array (no per-sweep allocation churn)
+local _harvestScratch = {}  -- reused each sweep, so no per-sweep table churn
 
 local function harvestAll()
-    if not bindHarvest() then
-        setHarvest("Status: No plot found")
+    local gardens = workspace:FindFirstChild("Gardens")
+    if not gardens then
+        setHarvest("Status: No Gardens found")
         return
     end
 
-    -- Snapshot keys first. We yield (task.wait) inside the fire loop below,
-    -- and the DescendantAdded/Removing connections mutate harvestPrompts during
-    -- those yields. Iterating the live table across a yield invalidates the
-    -- `next` iterator ("invalid key to 'next'"), so we walk a snapshot instead.
-    -- This pairs() pass does NOT yield, so it's safe.
     table.clear(_harvestScratch)
     local n = 0
-    for prompt in pairs(harvestPrompts) do
-        if prompt.Parent then
-            n = n + 1
-            _harvestScratch[n] = prompt
-        else
-            harvestPrompts[prompt] = nil  -- stale; safe to clear current/other keys, no yield here
+    for _, plot in ipairs(gardens:GetChildren()) do
+        local plants = plot:FindFirstChild("Plants")
+        if plants then
+            for _, pf in ipairs(plants:GetChildren()) do
+                if pf.Name:sub(1, #uid) == uid then
+                    for _, d in ipairs(pf:GetDescendants()) do
+                        if d:IsA("ProximityPrompt") and d.Enabled then
+                            n = n + 1
+                            _harvestScratch[n] = d
+                        end
+                    end
+                end
+            end
         end
     end
 
@@ -813,7 +779,12 @@ local function tryPlant()
     if Toggles.PlantNearMe.Value then
         pos = pointNearPlayer(areas, Options.PlantRadius.Value)
         if not pos then
-            setPlant("Status: No spot in radius (move onto plot)")
+            -- player is out of radius of any bed; fall back so it still plants
+            local area = areas[math.random(1, #areas)]
+            pos = randomPointOnPart(area)
+            setPlant("Status: Out of radius, planted on plot")
+            local ok = pcall(function() Networking.Plant.PlantSeed:Fire(pos, seedType, tool) end)
+            if not ok then setPlant("Status: Fire error") end
             return
         end
     else
@@ -823,15 +794,6 @@ local function tryPlant()
 
     local ok = pcall(function() Networking.Plant.PlantSeed:Fire(pos, seedType, tool) end)
     setPlant(ok and ("Status: Planted " .. tostring(seedType)) or "Status: Fire error")
-end
-
--- =============================================
---  SHARED CHARACTER HELPER
--- =============================================
-local function getRoot()
-    local char = player.Character
-    if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
 end
 
 -- =============================================
@@ -1782,11 +1744,6 @@ _G._gag_stop = function()
 
     -- restore graphics
     pcall(restorePerf)
-
-    -- drop harvest connections
-    for _, c in ipairs(harvestConns) do pcall(function() c:Disconnect() end) end
-    table.clear(harvestConns)
-    table.clear(harvestPrompts)
 
     pcall(function() player:SetAttribute("AntiAfkIdleOverride", 0) end)
     pcall(function() Library:Unload() end)
