@@ -558,6 +558,10 @@ end
 
 -- =============================================
 --  HARVEST LOGIC
+--  Only fires prompts that are Enabled (a ready crop). Firing every
+--  prompt every sweep — including not-ready or already-harvested ones —
+--  floods the request/response Packet and causes "ResponseReads" errors.
+--  We also de-dupe within a sweep so each prompt fires at most once.
 -- =============================================
 local function harvestAll()
     local gardens = workspace:FindFirstChild("Gardens")
@@ -567,6 +571,7 @@ local function harvestAll()
     end
 
     local triggered = 0
+    local seen = {}
 
     for _, plot in ipairs(gardens:GetChildren()) do
         local plants = plot:FindFirstChild("Plants")
@@ -578,7 +583,8 @@ local function harvestAll()
             for _, desc in ipairs(playerFolder:GetDescendants()) do
                 if not Alive() or not Toggles.AutoHarvest.Value then return end
 
-                if desc:IsA("ProximityPrompt") then
+                if desc:IsA("ProximityPrompt") and desc.Enabled and not seen[desc] then
+                    seen[desc] = true
                     pcall(function() fireproximityprompt(desc) end)
                     triggered = triggered + 1
                     task.wait(Options.HarvestDelay.Value)
