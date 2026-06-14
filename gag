@@ -17,10 +17,10 @@ local function Alive() return _alive end
 -- =============================================
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService       = game:GetService("HttpService")
 
 local player = Players.LocalPlayer
 if not player then
-    player = Players.LocalPlayer or Players:GetPropertyChangedSignal("LocalPlayer"):Wait() and Players.LocalPlayer
     while not player do
         task.wait(0.1)
         player = Players.LocalPlayer
@@ -73,73 +73,33 @@ local Options  = Library.Options
 --  SEED LIST
 -- =============================================
 local SEEDS = {
-    "Carrot",
-    "Strawberry",
-    "Blueberry",
-    "Tulip",
-    "Tomato",
-    "Apple",
-    "Bamboo",
-    "Corn",
-    "Cactus",
-    "Pineapple",
-    "Mushroom",
-    "Green Bean",
-    "Banana",
-    "Grape",
-    "Coconut",
-    "Mango",
-    "Dragon Fruit",
-    "Acorn",
-    "Cherry",
-    "Sunflower",
-    "Venus Fly Trap",
-    "Pomegranate",
-    "Poison Apple",
-    "Moon Bloom",
-    "Dragon's Breath",
+    "Carrot", "Strawberry", "Blueberry", "Tulip", "Tomato",
+    "Apple", "Bamboo", "Corn", "Cactus", "Pineapple",
+    "Mushroom", "Green Bean", "Banana", "Grape", "Coconut",
+    "Mango", "Dragon Fruit", "Acorn", "Cherry", "Sunflower",
+    "Venus Fly Trap", "Pomegranate", "Poison Apple", "Moon Bloom", "Dragon's Breath",
 }
 
 -- =============================================
 --  GEAR LIST
 -- =============================================
 local GEAR = {
-    "Common Watering Can",
-    "Super Watering Can",
-    "Common Sprinkler",
-    "Uncommon Sprinkler",
-    "Rare Sprinkler",
-    "Legendary Sprinkler",
-    "Super Sprinkler",
-    "Trowel",
-    "Basic Pot",
-    "Jump Mushroom",
-    "Speed Mushroom",
-    "Shrink Mushroom",
-    "Supersize Mushroom",
-    "Invisibility Mushroom",
-    "Gnome",
-    "Flashbang",
-    "Teleporter",
+    "Common Watering Can", "Super Watering Can",
+    "Common Sprinkler", "Uncommon Sprinkler", "Rare Sprinkler",
+    "Legendary Sprinkler", "Super Sprinkler",
+    "Trowel", "Basic Pot",
+    "Jump Mushroom", "Speed Mushroom", "Shrink Mushroom",
+    "Supersize Mushroom", "Invisibility Mushroom",
+    "Gnome", "Flashbang", "Teleporter",
 }
 
 -- =============================================
 --  PET LIST  (matched against WildPet_<Type>_WildPet_<id> model names)
 -- =============================================
 local PETS = {
-    "Bee",
-    "BlackDragon",
-    "Bunny",
-    "Deer",
-    "Dragonfly",
-    "Frog",
-    "GoldenDragonfly",
-    "IceSerpent",
-    "Monkey",
-    "Owl",
-    "Raccoon",
-    "Robin",
-    "Unicorn",
+    "Bee", "BlackDragon", "Bunny", "Deer", "Dragonfly",
+    "Frog", "GoldenDragonfly", "IceSerpent", "Monkey", "Owl",
+    "Raccoon", "Robin", "Unicorn",
 }
 
 -- =============================================
@@ -173,19 +133,7 @@ HarvestBox:AddToggle("AutoHarvest", {
     Default = false,
     Tooltip = "Automatically harvests all ready crops",
 })
-
-HarvestBox:AddSlider("HarvestDelay", {
-    Text     = "Harvest Delay",
-    Default  = 0.15,
-    Min      = 0.05,
-    Max      = 1.0,
-    Rounding = 2,
-    Suffix   = "s",
-})
-
 local HarvestStatus = HarvestBox:AddLabel("Status: Idle")
-local HarvestCount  = HarvestBox:AddLabel("Harvested: 0")
-local harvestCount  = 0
 
 -- ── Sell ─────────────────────────────────────
 SellBox:AddToggle("AutoSell", {
@@ -193,19 +141,7 @@ SellBox:AddToggle("AutoSell", {
     Default = false,
     Tooltip = "Automatically sells full inventory",
 })
-
-SellBox:AddSlider("SellInterval", {
-    Text     = "Sell Interval",
-    Default  = 5,
-    Min      = 1,
-    Max      = 60,
-    Rounding = 0,
-    Suffix   = "s",
-})
-
 local SellStatus = SellBox:AddLabel("Status: Idle")
-local SellCount  = SellBox:AddLabel("Sells: 0")
-local sellCount  = 0
 
 -- ── Seed Shop ────────────────────────────────
 ShopBox:AddDropdown("ShopSeeds", {
@@ -215,25 +151,12 @@ ShopBox:AddDropdown("ShopSeeds", {
     Default  = 1,
     Tooltip  = "Pick one or more seeds to auto-buy",
 })
-
-ShopBox:AddSlider("BuyInterval", {
-    Text     = "Buy Interval",
-    Default  = 1,
-    Min      = 0.1,
-    Max      = 30,
-    Rounding = 1,
-    Suffix   = "s",
-})
-
 ShopBox:AddToggle("AutoBuy", {
     Text    = "Auto Buy",
     Default = false,
-    Tooltip = "Continuously buys all selected seeds",
+    Tooltip = "Continuously buys all selected seeds that are in stock",
 })
-
 local BuyStatus = ShopBox:AddLabel("Status: Idle")
-local BuyCount  = ShopBox:AddLabel("Bought: 0")
-local buyCount  = 0
 
 -- ── Gear Shop ────────────────────────────────
 GearShopBox:AddDropdown("ShopGear", {
@@ -243,25 +166,12 @@ GearShopBox:AddDropdown("ShopGear", {
     Default = 1,
     Tooltip = "Pick one or more gear items to auto-buy",
 })
-
-GearShopBox:AddSlider("GearBuyInterval", {
-    Text     = "Buy Interval",
-    Default  = 1,
-    Min      = 0.1,
-    Max      = 30,
-    Rounding = 1,
-    Suffix   = "s",
-})
-
 GearShopBox:AddToggle("AutoBuyGear", {
     Text    = "Auto Buy Gear",
     Default = false,
-    Tooltip = "Continuously buys all selected gear",
+    Tooltip = "Continuously buys all selected gear that is in stock",
 })
-
 local GearBuyStatus = GearShopBox:AddLabel("Status: Idle")
-local GearBuyCount  = GearShopBox:AddLabel("Bought: 0")
-local gearBuyCount  = 0
 
 -- ── Auto Plant ───────────────────────────────
 PlantBox:AddDropdown("PlantSeeds", {
@@ -271,26 +181,12 @@ PlantBox:AddDropdown("PlantSeeds", {
     Default  = 1,
     Tooltip  = "Pick which seeds to plant (matched against your backpack)",
 })
-
-PlantBox:AddSlider("PlantDelay", {
-    Text     = "Plant Delay",
-    Default  = 0.07,
-    Min      = 0.05,
-    Max      = 1.0,
-    Rounding = 2,
-    Suffix   = "s",
-    Tooltip  = "Delay between each plant (0.05 = server rate limit floor)",
-})
-
 PlantBox:AddToggle("AutoPlant", {
     Text    = "Auto Plant",
     Default = false,
     Tooltip = "Plants selected seeds at random points on your plot (no need to hold them)",
 })
-
 local PlantStatus = PlantBox:AddLabel("Status: Idle")
-local PlantCount  = PlantBox:AddLabel("Planted: 0")
-local plantCount  = 0
 
 -- ── Auto Pet ──────────────────────────────────
 PetBox:AddDropdown("PetTypes", {
@@ -300,72 +196,43 @@ PetBox:AddDropdown("PetTypes", {
     Default  = 1,
     Tooltip  = "Pick which wild pet types to auto-buy (leave as-is to buy all)",
 })
-
 PetBox:AddToggle("BuyAllPets", {
     Text    = "Buy All Pet Types",
     Default = true,
     Tooltip = "Ignore the dropdown and buy every wild pet that spawns",
 })
-
-PetBox:AddSlider("PetDelay", {
-    Text     = "Pet Delay",
-    Default  = 0.2,
-    Min      = 0.05,
-    Max      = 2.0,
-    Rounding = 2,
-    Suffix   = "s",
-    Tooltip  = "Delay between each pet buy attempt",
-})
-
 PetBox:AddToggle("AutoPet", {
     Text    = "Auto Buy Pets",
     Default = false,
     Tooltip = "Teleports to each wild pet, buys it, then returns you",
 })
-
 PetBox:AddToggle("PetReturn", {
     Text    = "Return After Buying",
     Default = true,
     Tooltip = "Snap back to your start position after each buy pass",
 })
-
 local PetStatus = PetBox:AddLabel("Status: Idle")
-local PetCount  = PetBox:AddLabel("Pets: 0")
-local petCount  = 0
 
 -- ── Auto Drops ───────────────────────────────
-DropsBox:AddSlider("DropsDelay", {
-    Text     = "Collect Delay",
-    Default  = 0.15,
-    Min      = 0.05,
-    Max      = 2.0,
-    Rounding = 2,
-    Suffix   = "s",
-    Tooltip  = "Delay between teleporting to each drop",
-})
-
 DropsBox:AddToggle("DropsReturn", {
     Text    = "Return After Collecting",
     Default = true,
     Tooltip = "Snap back to your start position after each sweep",
 })
-
 DropsBox:AddToggle("AutoDrops", {
     Text    = "Auto Collect Drops",
     Default = false,
     Tooltip = "Teleports to and collects DroppedItems and SeedPack spawns",
 })
-
 local DropsStatus = DropsBox:AddLabel("Status: Idle")
-local DropsCount  = DropsBox:AddLabel("Collected: 0")
-local dropCount   = 0
 
 -- =============================================
 --  MAILBOX TAB
 -- =============================================
-local MailTab    = Window:AddTab("Mailbox", "mail")
+local MailTab     = Window:AddTab("Mailbox", "mail")
 local MailBox     = MailTab:AddLeftGroupbox("Send Gifts")
 local MailCatBox  = MailTab:AddRightGroupbox("What to Send")
+local WebhookBox  = MailTab:AddRightGroupbox("Discord Webhook")
 
 MailBox:AddInput("MailTarget", {
     Text        = "Recipient Username",
@@ -384,19 +251,15 @@ MailBox:AddInput("MailNote", {
     Finished    = false,
 })
 
-MailBox:AddSlider("MailInterval", {
-    Text     = "Send Interval",
-    Default  = 2,
-    Min      = 1.5,
-    Max      = 15,
-    Rounding = 1,
-    Suffix   = "s",
-    Tooltip  = "Time between batches (server cooldown is 1.5s)",
+MailBox:AddSlider("MailBatchSize", {
+    Text     = "Items per Send",
+    Default  = 20,
+    Min      = 1,
+    Max      = 20,
+    Rounding = 0,
+    Suffix   = "x",
+    Tooltip  = "How many items to send per batch (server max is 20)",
 })
-
-local MailStatus = MailBox:AddLabel("Status: Idle")
-local MailCountL = MailBox:AddLabel("Sent: 0")
-local mailSent   = 0
 
 MailBox:AddButton({
     Text = "Send Once",
@@ -408,8 +271,10 @@ MailBox:AddButton({
 MailBox:AddToggle("AutoMail", {
     Text    = "Auto Send",
     Default = false,
-    Tooltip = "Continuously sends your inventory (20 items/batch) until empty",
+    Tooltip = "Continuously sends your inventory until empty",
 })
+
+local MailStatus = MailBox:AddLabel("Status: Idle")
 
 MailCatBox:AddDropdown("MailCats", {
     Text    = "Categories",
@@ -429,6 +294,76 @@ MailCatBox:AddToggle("MailSkipPets", {
     Text    = "Skip Pets",
     Default = true,
     Tooltip = "Don't send pets (safety so you don't gift away pets by accident)",
+})
+
+MailCatBox:AddToggle("MailWaitFull", {
+    Text    = "Wait Until Full",
+    Default = false,
+    Tooltip = "Only send once you have a full batch (Items per Send). Otherwise sends whatever is available.",
+})
+
+-- Discord webhook config
+WebhookBox:AddInput("WebhookUrl", {
+    Text        = "Webhook URL",
+    Default     = "",
+    Placeholder = "https://discord.com/api/webhooks/...",
+    Numeric     = false,
+    Finished    = false,
+    Tooltip     = "Discord webhook to notify when mail is sent",
+})
+
+WebhookBox:AddToggle("WebhookEnabled", {
+    Text    = "Send Webhook on Mail",
+    Default = false,
+    Tooltip = "Post a summary to Discord each time a gift batch is sent",
+})
+
+WebhookBox:AddButton({
+    Text = "Test Webhook",
+    Func = function()
+        _G._gag_webhook_test = true
+    end,
+})
+
+-- =============================================
+--  TIMINGS TAB  (all delays/intervals live here)
+-- =============================================
+local TimingsTab = Window:AddTab("Timings", "timer")
+local FarmTimings = TimingsTab:AddLeftGroupbox("Farming")
+local ShopTimings = TimingsTab:AddRightGroupbox("Shops & Mail")
+
+FarmTimings:AddSlider("HarvestDelay", {
+    Text = "Harvest Delay", Default = 0.15, Min = 0.05, Max = 1.0,
+    Rounding = 2, Suffix = "s", Tooltip = "Delay between each crop harvest",
+})
+FarmTimings:AddSlider("PlantDelay", {
+    Text = "Plant Delay", Default = 0.07, Min = 0.05, Max = 1.0,
+    Rounding = 2, Suffix = "s", Tooltip = "Delay between each plant (0.05 = server floor)",
+})
+FarmTimings:AddSlider("PetDelay", {
+    Text = "Pet Buy Delay", Default = 0.2, Min = 0.05, Max = 2.0,
+    Rounding = 2, Suffix = "s", Tooltip = "Delay between each pet buy attempt",
+})
+FarmTimings:AddSlider("DropsDelay", {
+    Text = "Drops Collect Delay", Default = 0.15, Min = 0.05, Max = 2.0,
+    Rounding = 2, Suffix = "s", Tooltip = "Delay between teleporting to each drop",
+})
+
+ShopTimings:AddSlider("BuyInterval", {
+    Text = "Seed Buy Interval", Default = 1, Min = 0.1, Max = 30,
+    Rounding = 1, Suffix = "s", Tooltip = "Time between seed buys",
+})
+ShopTimings:AddSlider("GearBuyInterval", {
+    Text = "Gear Buy Interval", Default = 1, Min = 0.1, Max = 30,
+    Rounding = 1, Suffix = "s", Tooltip = "Time between gear buys",
+})
+ShopTimings:AddSlider("SellInterval", {
+    Text = "Sell Interval", Default = 5, Min = 1, Max = 60,
+    Rounding = 0, Suffix = "s", Tooltip = "How often to attempt selling",
+})
+ShopTimings:AddSlider("MailInterval", {
+    Text = "Mail Send Interval", Default = 2, Min = 1.5, Max = 15,
+    Rounding = 1, Suffix = "s", Tooltip = "Time between mail batches (server cooldown 1.5s)",
 })
 
 -- =============================================
@@ -546,6 +481,42 @@ local function randomPointOnPart(part)
 end
 
 -- =============================================
+--  STOCK HELPER
+--  Reads "xN in Stock" from each item's GUI in the shop frame.
+-- =============================================
+local PlayerGui = player:WaitForChild("PlayerGui")
+
+local function getStock(shopGuiName, itemName)
+    local gui = PlayerGui:FindFirstChild(shopGuiName)
+    if not gui then return nil end
+
+    local entry = gui:FindFirstChild(itemName, true)
+    if not entry then return nil end
+
+    local stockText = entry:FindFirstChild("Stock_Text", true)
+    if stockText and stockText:IsA("TextLabel") then
+        local n = tostring(stockText.Text):match("x?(%d+)")
+        if n then return tonumber(n) end
+    end
+
+    local costText = entry:FindFirstChild("Cost_Text", true)
+    if costText and costText:IsA("TextLabel") then
+        if tostring(costText.Text):upper():find("NO STOCK") then
+            return 0
+        end
+        return 1
+    end
+
+    return nil
+end
+
+local function inStock(shopGuiName, itemName)
+    local s = getStock(shopGuiName, itemName)
+    if s == nil then return true end
+    return s > 0
+end
+
+-- =============================================
 --  HARVEST LOGIC
 -- =============================================
 local function harvestAll()
@@ -565,15 +536,11 @@ local function harvestAll()
             if playerFolder.Name:sub(1, #uid) ~= uid then continue end
 
             for _, desc in ipairs(playerFolder:GetDescendants()) do
-                if not Alive() or not Toggles.AutoHarvest.Value then
-                    HarvestCount:SetText("Harvested: " .. harvestCount)
-                    return
-                end
+                if not Alive() or not Toggles.AutoHarvest.Value then return end
 
                 if desc:IsA("ProximityPrompt") then
                     pcall(function() fireproximityprompt(desc) end)
-                    triggered    = triggered + 1
-                    harvestCount = harvestCount + 1
+                    triggered = triggered + 1
                     task.wait(Options.HarvestDelay.Value)
                 end
             end
@@ -585,7 +552,6 @@ local function harvestAll()
     else
         HarvestStatus:SetText("Status: Nothing ready")
     end
-    HarvestCount:SetText("Harvested: " .. harvestCount)
 end
 
 -- =============================================
@@ -614,17 +580,14 @@ local function trySell()
     end)
 
     if result and result.Success then
-        sellCount = sellCount + 1
         SellStatus:SetText(string.format("Status: Sold %d items", result.SoldCount or fruitCount))
-        SellCount:SetText("Sells: " .. sellCount)
     else
         SellStatus:SetText("Status: Failed / cooldown")
     end
 end
 
 -- =============================================
---  BUY LOGIC (Seed Shop)
---  One seed per tick to avoid coroutine spam.
+--  BUY LOGIC (Seed Shop) — skips out-of-stock seeds
 -- =============================================
 local _seedBuyList  = {}
 local _seedBuyIndex = 1
@@ -642,31 +605,40 @@ local function tryBuy()
     end
     if #_seedBuyList == 0 then return end
 
-    if _seedBuyIndex > #_seedBuyList then _seedBuyIndex = 1 end
-    local seed = _seedBuyList[_seedBuyIndex]
-    _seedBuyIndex = _seedBuyIndex + 1
+    local tries = 0
+    local seed = nil
+    while tries < #_seedBuyList do
+        if _seedBuyIndex > #_seedBuyList then _seedBuyIndex = 1 end
+        local candidate = _seedBuyList[_seedBuyIndex]
+        _seedBuyIndex = _seedBuyIndex + 1
+        tries = tries + 1
+        if inStock("SeedShop", candidate) then
+            seed = candidate
+            break
+        end
+    end
+
+    if not seed then
+        BuyStatus:SetText("Status: All out of stock")
+        return
+    end
 
     local ok = pcall(function()
         Networking.SeedShop.PurchaseSeed:Fire(seed)
     end)
 
     if ok then
-        buyCount = buyCount + 1
         BuyStatus:SetText("Status: Bought " .. seed)
-        BuyCount:SetText("Bought: " .. buyCount)
     else
         BuyStatus:SetText("Status: Failed / cooldown")
     end
 end
 
 -- =============================================
---  BUY LOGIC (Gear Shop)
---  Buys ONE item per call so the yielding Packet coroutine
---  fully resolves before the next fire (avoids "cannot resume
---  non-suspended coroutine" spam). The outer loop handles pacing.
+--  BUY LOGIC (Gear Shop) — skips out-of-stock gear
 -- =============================================
-local _gearBuyList  = {}  -- ordered list of currently-selected gear
-local _gearBuyIndex = 1   -- cycles through the list one item per tick
+local _gearBuyList  = {}
+local _gearBuyIndex = 1
 
 local function tryBuyGear()
     local selected = Options.ShopGear.Value
@@ -675,26 +647,36 @@ local function tryBuyGear()
         return
     end
 
-    -- Rebuild list whenever selection may have changed
     _gearBuyList = {}
     for gear, active in pairs(selected) do
         if active then table.insert(_gearBuyList, gear) end
     end
     if #_gearBuyList == 0 then return end
 
-    -- Clamp index and advance for next call
-    if _gearBuyIndex > #_gearBuyList then _gearBuyIndex = 1 end
-    local gear = _gearBuyList[_gearBuyIndex]
-    _gearBuyIndex = _gearBuyIndex + 1
+    local tries = 0
+    local gear = nil
+    while tries < #_gearBuyList do
+        if _gearBuyIndex > #_gearBuyList then _gearBuyIndex = 1 end
+        local candidate = _gearBuyList[_gearBuyIndex]
+        _gearBuyIndex = _gearBuyIndex + 1
+        tries = tries + 1
+        if inStock("GearShop", candidate) then
+            gear = candidate
+            break
+        end
+    end
+
+    if not gear then
+        GearBuyStatus:SetText("Status: All out of stock")
+        return
+    end
 
     local ok = pcall(function()
         Networking.GearShop.PurchaseGear:Fire(gear)
     end)
 
     if ok then
-        gearBuyCount = gearBuyCount + 1
         GearBuyStatus:SetText("Status: Bought " .. gear)
-        GearBuyCount:SetText("Bought: " .. gearBuyCount)
     else
         GearBuyStatus:SetText("Status: Failed / cooldown")
     end
@@ -731,9 +713,7 @@ local function tryPlant()
     end)
 
     if ok then
-        plantCount = plantCount + 1
         PlantStatus:SetText("Status: Planted " .. tostring(seedType))
-        PlantCount:SetText("Planted: " .. plantCount)
     else
         PlantStatus:SetText("Status: Fire error")
     end
@@ -743,8 +723,7 @@ end
 --  PET BUY LOGIC (hardened)
 -- =============================================
 local function petTypeFromName(name)
-    local t = name:match("^WildPet_([%w]+)_")
-    return t
+    return name:match("^WildPet_([%w]+)_")
 end
 
 local function getRoot()
@@ -787,16 +766,11 @@ local function collectPetPrompts()
         return out, nil
     end)
 
-    if not ok then
-        return nil, "Scan error"
-    end
-    if list == nil then
-        return nil, errMsg or "Unknown error"
-    end
+    if not ok then return nil, "Scan error" end
+    if list == nil then return nil, errMsg or "Unknown error" end
     return list
 end
 
--- Fire a pet-buy prompt with retries, just like guaranteedFire in collectDrops
 local function buyOnePet(entry)
     local prompt = entry.prompt
     local part   = entry.part
@@ -805,7 +779,6 @@ local function buyOnePet(entry)
         return false
     end
 
-    -- Re-fetch root right before teleporting (handles respawn mid-loop)
     local r = getRoot()
     if not r then return false end
 
@@ -820,13 +793,10 @@ local function buyOnePet(entry)
     pcall(function() prompt.HoldDuration = 0 end)
 
     local fired = false
-    for attempt = 1, 3 do
+    for _ = 1, 3 do
         if not prompt.Parent then break end
         local fireOk = pcall(function() fireproximityprompt(prompt) end)
-        if fireOk then
-            fired = true
-            break
-        end
+        if fireOk then fired = true break end
         task.wait(0.05)
     end
 
@@ -844,17 +814,13 @@ local function tryBuyPets()
         return
     end
 
-    -- Capture return position FIRST, before anything that can yield/error
     local returnCF = root.CFrame
 
-    -- Guaranteed return helper, mirrors alwaysReturn() in collectDrops
     local function alwaysReturnPet()
         if not Toggles.PetReturn.Value then return end
         for _ = 1, 3 do
             local r = getRoot()
-            if r then
-                pcall(function() r.CFrame = returnCF end)
-            end
+            if r then pcall(function() r.CFrame = returnCF end) end
             task.wait(0.05)
         end
     end
@@ -878,15 +844,10 @@ local function tryBuyPets()
     local entry = list[1]
     PetStatus:SetText("Status: Buying " .. (entry.ptype or "pet"))
 
-    -- Wrap the whole attempt so a mid-buy error can't skip the return teleport
     local bought = false
-    pcall(function()
-        bought = buyOnePet(entry)
-    end)
+    pcall(function() bought = buyOnePet(entry) end)
 
     if bought then
-        petCount = petCount + 1
-        PetCount:SetText("Pets: " .. petCount)
         PetStatus:SetText("Status: Bought " .. (entry.ptype or "pet"))
     else
         PetStatus:SetText("Status: Buy failed, will retry")
@@ -897,9 +858,6 @@ end
 
 -- =============================================
 --  AUTO DROPS LOGIC
---  Bulletproof: captures returnCF first, wraps entire sweep in pcall,
---  retries each prompt up to 3x, and ALWAYS teleports back no matter
---  what error or break happens.
 -- =============================================
 local function collectDrops()
     local root = getRoot()
@@ -908,14 +866,12 @@ local function collectDrops()
         return
     end
 
-    -- Capture return position FIRST before any yields or errors can happen
     local returnCF = root.CFrame
 
-    -- Guaranteed return helper — called in every exit path
     local function alwaysReturn()
+        if not Toggles.DropsReturn.Value then return end
         local r = getRoot()
         if r then
-            -- retry the teleport a few times in case the character is mid-animation
             for _ = 1, 3 do
                 pcall(function() r.CFrame = returnCF end)
                 task.wait(0.05)
@@ -923,7 +879,6 @@ local function collectDrops()
         end
     end
 
-    -- Scan a container for all enabled ProximityPrompts
     local function scanContainer(container, out)
         if not container then return end
         for _, desc in ipairs(container:GetDescendants()) do
@@ -939,7 +894,6 @@ local function collectDrops()
         end
     end
 
-    -- Fire one prompt with retries — zeros hold duration, fires up to 3 attempts
     local function guaranteedFire(prompt)
         if not prompt or not prompt.Parent then return false end
 
@@ -950,26 +904,20 @@ local function collectDrops()
         end)
 
         local fired = false
-        for attempt = 1, 3 do
+        for _ = 1, 3 do
             if not prompt.Parent then break end
             local ok = pcall(function() fireproximityprompt(prompt) end)
-            if ok then
-                fired = true
-                break
-            end
+            if ok then fired = true break end
             task.wait(0.05)
         end
 
         pcall(function()
-            if prompt and prompt.Parent then
-                prompt.HoldDuration = oldHold
-            end
+            if prompt and prompt.Parent then prompt.HoldDuration = oldHold end
         end)
 
         return fired
     end
 
-    -- Wrap entire sweep so errors never skip the return
     local collected = 0
     pcall(function()
         local prompts = {}
@@ -985,35 +933,28 @@ local function collectDrops()
             return
         end
 
-        -- Nearest-first to minimise travel
         table.sort(prompts, function(a, b)
             return (a.part.Position - returnCF.Position).Magnitude
                  < (b.part.Position - returnCF.Position).Magnitude
         end)
 
-for _, entry in ipairs(prompts) do
-    if not Alive() or not Toggles.AutoDrops.Value then break end
+        for _, entry in ipairs(prompts) do
+            if not Alive() or not Toggles.AutoDrops.Value then break end
 
-    local prompt = entry.prompt
-    local part   = entry.part
+            local prompt = entry.prompt
+            local part   = entry.part
+            if not prompt or not prompt.Parent or not part or not part.Parent then
+                continue
+            end
 
-    if not prompt or not prompt.Parent or not part or not part.Parent then
-        continue
-    end
+            local r = getRoot()
+            if not r then break end
 
-    -- Re-fetch root each loop in case character respawned mid-sweep
-    local r = getRoot()
-    if not r then break end
+            r.CFrame = CFrame.new(part.Position + Vector3.new(0, 2, 0))
+            task.wait(0.15)
 
-    r.CFrame = CFrame.new(part.Position + Vector3.new(0, 2, 0))
-    task.wait(0.15)
-
-    local fired = guaranteedFire(prompt)
-
-            if fired then
+            if guaranteedFire(prompt) then
                 collected = collected + 1
-                dropCount = dropCount + 1
-                DropsCount:SetText("Collected: " .. dropCount)
                 DropsStatus:SetText("Status: Collecting... (" .. collected .. ")")
             end
 
@@ -1027,9 +968,41 @@ for _, entry in ipairs(prompts) do
         end
     end)
 
-    -- ALWAYS return — runs even if pcall caught an error or toggle was flipped
     alwaysReturn()
 end
+
+-- =============================================
+--  DISCORD WEBHOOK
+-- =============================================
+local function getRequestFn()
+    return (syn and syn.request)
+        or (http and http.request)
+        or http_request
+        or request
+        or (fluxus and fluxus.request)
+        or nil
+end
+
+local function sendWebhook(content)
+    local url = Options.WebhookUrl.Value
+    if not url or url == "" then return false end
+
+    local req = getRequestFn()
+    if not req then return false end
+
+    local ok = pcall(function()
+        req({
+            Url     = url,
+            Method  = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body    = HttpService:JSONEncode({ content = content }),
+        })
+    end)
+    return ok
+end
+
+-- =============================================
+--  MAILBOX SEND LOGIC
 -- =============================================
 local mailUserCache = {}
 
@@ -1047,14 +1020,18 @@ local function lookupUser(username)
     return nil
 end
 
-local function buildMailBatch()
+-- Builds a batch up to maxItems total count. Returns items, totalCount.
+local function buildMailBatch(maxItems)
+    maxItems = maxItems or 20
+    if maxItems > 20 then maxItems = 20 end
+
     local items = {}
-    if not PlayerStateClient then return items, "No PlayerStateClient" end
+    if not PlayerStateClient then return items, 0, "No PlayerStateClient" end
 
     local replica
     pcall(function() replica = PlayerStateClient:GetLocalReplica() end)
     local inv = replica and replica.Data and replica.Data.Inventory
-    if typeof(inv) ~= "table" then return items, "No inventory" end
+    if typeof(inv) ~= "table" then return items, 0, "No inventory" end
 
     local sendAll   = Toggles.MailAllCats.Value
     local catFilter = Options.MailCats.Value
@@ -1063,7 +1040,7 @@ local function buildMailBatch()
     local total = 0
 
     for _, cat in ipairs(GIFTABLE_CATEGORIES) do
-        if total >= 20 then break end
+        if total >= maxItems then break end
         if cat == "Pets" and skipPets then continue end
         if not sendAll and not (catFilter and catFilter[cat]) then continue end
 
@@ -1072,7 +1049,7 @@ local function buildMailBatch()
 
         if cat == "Pets" or cat == "HarvestedFruits" then
             for id, entry in pairs(catTable) do
-                if total >= 20 then break end
+                if total >= maxItems then break end
                 if typeof(entry) == "table" and entry.Id ~= nil then
                     if not (cat == "Pets" and entry.Equipped == true) then
                         table.insert(items, { Category = cat, ItemKey = id, Count = 1 })
@@ -1082,9 +1059,9 @@ local function buildMailBatch()
             end
         else
             for itemKey, count in pairs(catTable) do
-                if total >= 20 then break end
+                if total >= maxItems then break end
                 if typeof(count) == "number" and count > 0 then
-                    local canAdd = math.min(count, 20 - total)
+                    local canAdd = math.min(count, maxItems - total)
                     if canAdd > 0 then
                         table.insert(items, { Category = cat, ItemKey = itemKey, Count = canAdd })
                         total = total + canAdd
@@ -1094,7 +1071,27 @@ local function buildMailBatch()
         end
     end
 
-    return items
+    return items, total
+end
+
+-- Build a human-readable summary grouped by category
+local function summariseBatch(items, total, username)
+    local byCat = {}
+    local order = {}
+    for _, it in ipairs(items) do
+        if not byCat[it.Category] then table.insert(order, it.Category) end
+        byCat[it.Category] = (byCat[it.Category] or 0) + it.Count
+    end
+
+    local lines = {}
+    for _, cat in ipairs(order) do
+        table.insert(lines, "• " .. cat .. ": " .. byCat[cat])
+    end
+
+    return string.format(
+        "📬 **Mailed %d item(s)** to `%s`\n%s",
+        total, username, table.concat(lines, "\n")
+    )
 end
 
 local function sendMailOnce()
@@ -1109,16 +1106,24 @@ local function sendMailOnce()
         return false
     end
 
+    local batchSize = math.floor(Options.MailBatchSize.Value)
+    local items, total = buildMailBatch(batchSize)
+
+    if #items == 0 then
+        MailStatus:SetText("Status: Nothing to send")
+        return false
+    end
+
+    -- Wait Until Full: hold off until we can fill a complete batch
+    if Toggles.MailWaitFull.Value and total < batchSize then
+        MailStatus:SetText(string.format("Status: Waiting (%d/%d)", total, batchSize))
+        return false
+    end
+
     MailStatus:SetText("Status: Looking up...")
     local userId = lookupUser(username)
     if not userId then
         MailStatus:SetText("Status: User not found")
-        return false
-    end
-
-    local items = buildMailBatch()
-    if #items == 0 then
-        MailStatus:SetText("Status: Nothing to send")
         return false
     end
 
@@ -1129,9 +1134,10 @@ local function sendMailOnce()
     end)
 
     if ok and success then
-        mailSent = mailSent + 1
-        MailCountL:SetText("Sent: " .. mailSent)
-        MailStatus:SetText("Status: Sent batch of " .. #items)
+        MailStatus:SetText("Status: Sent batch of " .. total)
+        if Toggles.WebhookEnabled.Value then
+            sendWebhook(summariseBatch(items, total, username))
+        end
         return true
     else
         MailStatus:SetText("Status: " .. (typeof(msg) == "string" and msg ~= "" and msg or "Send failed"))
@@ -1254,7 +1260,7 @@ task.spawn(function()
     while Alive() do
         if Toggles.AutoDrops.Value then
             collectDrops()
-            task.wait(1) -- brief pause between full sweeps
+            task.wait(1)
         else
             DropsStatus:SetText("Status: Idle")
             task.wait(0.5)
@@ -1264,6 +1270,14 @@ end)
 
 task.spawn(function()
     while Alive() do
+        -- test webhook button
+        if _G._gag_webhook_test then
+            _G._gag_webhook_test = false
+            local sent = sendWebhook("✅ Test from Grow a Garden script — webhook is working!")
+            MailStatus:SetText(sent and "Status: Webhook test sent" or "Status: Webhook failed (no URL / no http)")
+        end
+
+        -- one-shot Send Once button
         if _G._gag_mail_once then
             _G._gag_mail_once = false
             sendMailOnce()
@@ -1278,7 +1292,7 @@ task.spawn(function()
                 task.wait(2)
             end
         else
-            if not _G._gag_mail_once then
+            if not _G._gag_mail_once and not _G._gag_webhook_test then
                 MailStatus:SetText("Status: Idle")
             end
             task.wait(0.5)
@@ -1292,6 +1306,7 @@ end)
 _G._gag_stop = function()
     _alive = false
     _G._gag_mail_once = false
+    _G._gag_webhook_test = false
     pcall(function() player:SetAttribute("AntiAfkIdleOverride", 0) end)
     pcall(function() Library:Unload() end)
 end
