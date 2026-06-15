@@ -114,7 +114,7 @@ local PETS = {
 -- =============================================
 local Window = Library:CreateWindow({
     Title            = "Grow a Garden",
-    Footer           = "by c.",
+    Footer           = "by sacred",
     ToggleKeybind    = Enum.KeyCode.RightControl,
     Center           = true,
     AutoShow         = true,
