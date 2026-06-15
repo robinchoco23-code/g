@@ -198,7 +198,7 @@ PlantBox:AddToggle("PlantNearMe", {
 })
 PlantBox:AddSlider("PlantRadius", {
     Text    = "Plant Radius",
-    Default = 20, Min = 6, Max = 100,
+    Default = 20, Min = 4, Max = 100,
     Rounding = 0, Suffix = " studs",
     Tooltip = "Max distance from you to plant (used when 'Plant Near Me' is on)",
 })
@@ -540,27 +540,32 @@ local function randomPointOnPart(part)
     return part.CFrame:PointToWorldSpace(Vector3.new(offX, size.Y / 2, offZ))
 end
 
--- Pick a point on a valid plant area that is within `radius` of the player
--- (and at least minDist away, so it's never on top of you). We sample real
--- on-plot points via randomPointOnPart — points the server already accepts —
--- and keep the first one that falls inside the ring. Returns nil if the player
--- is too far from any plant area for the radius to reach.
+-- Pick a point near the player: choose a spot in the ring (minDist..radius)
+-- around you *first*, then keep it only if it lands on a valid plant area.
+-- Sampling in the ring directly (polar) means even a tiny radius works — every
+-- candidate is already in range, so we only reject points that are off a bed.
+-- Returns nil if nothing in range is on a bed (e.g. you're standing off-plot).
 local function pointNearPlayer(areas, radius)
     local root = getRoot()
     if not root then return nil end
 
     local origin  = root.Position
-    local minDist = 5
-    if radius <= minDist then radius = minDist + 1 end
+    local minDist = 3                       -- close, but never on top of you
+    if radius <= minDist then radius = minDist + 0.5 end
 
-    for _ = 1, 40 do
-        local area = areas[math.random(1, #areas)]
-        local p = randomPointOnPart(area)
-        -- horizontal distance from the player
-        local dx, dz = p.X - origin.X, p.Z - origin.Z
-        local flat = math.sqrt(dx * dx + dz * dz)
-        if flat >= minDist and flat <= radius then
-            return p
+    for _ = 1, 60 do
+        local ang  = math.random() * 2 * math.pi
+        local dist = minDist + math.random() * (radius - minDist)
+        local wx = origin.X + math.cos(ang) * dist
+        local wz = origin.Z + math.sin(ang) * dist
+
+        for _, area in ipairs(areas) do
+            -- footprint test in the part's own space (handles rotated plots)
+            local rel = area.CFrame:PointToObjectSpace(Vector3.new(wx, area.Position.Y, wz))
+            if math.abs(rel.X) <= area.Size.X / 2 and math.abs(rel.Z) <= area.Size.Z / 2 then
+                -- return the surface point directly above that footprint spot
+                return area.CFrame:PointToWorldSpace(Vector3.new(rel.X, area.Size.Y / 2, rel.Z))
+            end
         end
     end
     return nil
@@ -779,12 +784,9 @@ local function tryPlant()
     if Toggles.PlantNearMe.Value then
         pos = pointNearPlayer(areas, Options.PlantRadius.Value)
         if not pos then
-            -- player is out of radius of any bed; fall back so it still plants
-            local area = areas[math.random(1, #areas)]
-            pos = randomPointOnPart(area)
-            setPlant("Status: Out of radius, planted on plot")
-            local ok = pcall(function() Networking.Plant.PlantSeed:Fire(pos, seedType, tool) end)
-            if not ok then setPlant("Status: Fire error") end
+            -- Stay strict: never plant outside the radius. Just wait and retry
+            -- next tick so seeds can't scatter across the whole plot.
+            setPlant("Status: No spot in radius — stand on your plot")
             return
         end
     else
