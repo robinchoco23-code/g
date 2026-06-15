@@ -1,5 +1,7 @@
 -- Auto Harvest + Auto Sell + Auto Buy + Auto Plant | Grow a Garden
 -- Obsidian UI | github.com/deividcomsono/Obsidian
+-- Optimized: indexed harvest scan, reused buy lists, hoisted closures,
+--            deduped status labels, + Performance (Potato Mode) tab.
 
 -- =============================================
 --  EXECUTE GUARD
@@ -18,6 +20,8 @@ local function Alive() return _alive end
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
+local Lighting          = game:GetService("Lighting")
+local RunService        = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 if not player then
@@ -34,27 +38,15 @@ local uid = tostring(player.UserId)
 -- =============================================
 local Networking = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Networking"))
 
--- PlayerStateClient holds the local inventory replica (used for mailbox sending)
 local PlayerStateClient = nil
 pcall(function()
     PlayerStateClient = require(ReplicatedStorage.ClientModules.PlayerStateClient)
 end)
 
--- Categories the mailbox accepts (from MailboxItemCatalog.Categories)
 local GIFTABLE_CATEGORIES = {
-    "Pets",
-    "Sprinklers",
-    "WateringCans",
-    "Mushrooms",
-    "Gnomes",
-    "Raccoons",
-    "Crates",
-    "SeedPacks",
-    "Trowels",
-    "Props",
-    "Seeds",
-    "HarvestedFruits",
-    "EmptyPots",
+    "Pets", "Sprinklers", "WateringCans", "Mushrooms", "Gnomes",
+    "Raccoons", "Crates", "SeedPacks", "Trowels", "Props",
+    "Seeds", "HarvestedFruits", "EmptyPots",
 }
 
 -- =============================================
@@ -67,10 +59,24 @@ local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))
 local SaveManager  = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
 local Toggles = Library.Toggles
-local Options  = Library.Options
+local Options = Library.Options
 
 -- =============================================
---  SEED LIST
+--  STATUS LABEL HELPER (dedups SetText so idle loops
+--  don't poke the UI / allocate strings every tick)
+-- =============================================
+local function statusSetter(label)
+    local last
+    return function(txt)
+        if txt ~= last then
+            last = txt
+            label:SetText(txt)
+        end
+    end
+end
+
+-- =============================================
+--  LISTS
 -- =============================================
 local SEEDS = {
     "Carrot", "Strawberry", "Blueberry", "Tulip", "Tomato",
@@ -80,9 +86,6 @@ local SEEDS = {
     "Venus Fly Trap", "Pomegranate", "Poison Apple", "Moon Bloom", "Dragon's Breath",
 }
 
--- =============================================
---  GEAR LIST
--- =============================================
 local GEAR = {
     "Common Watering Can", "Super Watering Can",
     "Common Sprinkler", "Uncommon Sprinkler", "Rare Sprinkler",
@@ -93,29 +96,13 @@ local GEAR = {
     "Gnome", "Flashbang", "Teleporter",
 }
 
--- =============================================
---  CRATE LIST  (Prop Shop — crates that open into props)
--- =============================================
 local CRATES = {
-    "Ladder Crate",
-    "Bench Crate",
-    "Light Crate",
-    "Sign Crate",
-    "Arch Crate",
-    "Roleplay Crate",
-    "Bridge Crate",
-    "Spring Crate",
-    "Seesaw Crate",
-    "Conveyor Crate",
-    "Owner Door Crate",
-    "Bear Trap Crate",
-    "Fence Crate",
-    "Teleporter Pad Crate",
+    "Ladder Crate", "Bench Crate", "Light Crate", "Sign Crate",
+    "Arch Crate", "Roleplay Crate", "Bridge Crate", "Spring Crate",
+    "Seesaw Crate", "Conveyor Crate", "Owner Door Crate",
+    "Bear Trap Crate", "Fence Crate", "Teleporter Pad Crate",
 }
 
--- =============================================
---  PET LIST  (matched against WildPet_<Type>_WildPet_<id> model names)
--- =============================================
 local PETS = {
     "Bee", "BlackDragon", "Bunny", "Deer", "Dragonfly",
     "Frog", "GoldenDragonfly", "IceSerpent", "Monkey", "Owl",
@@ -139,232 +126,171 @@ local Window = Library:CreateWindow({
 -- =============================================
 local MainTab = Window:AddTab("Main", "sprout")
 
-local HarvestBox  = MainTab:AddLeftGroupbox("Harvest")
-local SellBox     = MainTab:AddLeftGroupbox("Sell")
-local PetBox      = MainTab:AddLeftGroupbox("Auto Pet")
-local DropsBox    = MainTab:AddLeftGroupbox("Auto Drops")
-local ShopBox     = MainTab:AddRightGroupbox("Seed Shop")
-local GearShopBox = MainTab:AddRightGroupbox("Gear Shop")
+local HarvestBox   = MainTab:AddLeftGroupbox("Harvest")
+local SellBox      = MainTab:AddLeftGroupbox("Sell")
+local PetBox       = MainTab:AddLeftGroupbox("Auto Pet")
+local DropsBox     = MainTab:AddLeftGroupbox("Auto Drops")
+local ShopBox      = MainTab:AddRightGroupbox("Seed Shop")
+local GearShopBox  = MainTab:AddRightGroupbox("Gear Shop")
 local CrateShopBox = MainTab:AddRightGroupbox("Prop / Crate Shop")
-local PlantBox    = MainTab:AddRightGroupbox("Auto Plant")
+local PlantBox     = MainTab:AddRightGroupbox("Auto Plant")
 
--- ── Harvest ───────────────────────────────────
+-- ── Harvest ──
 HarvestBox:AddToggle("AutoHarvest", {
-    Text    = "Auto Harvest",
-    Default = false,
+    Text = "Auto Harvest", Default = false,
     Tooltip = "Automatically harvests all ready crops",
 })
-local HarvestStatus = HarvestBox:AddLabel("Status: Idle")
+local setHarvest = statusSetter(HarvestBox:AddLabel("Status: Idle"))
 
--- ── Sell ─────────────────────────────────────
+-- ── Sell ──
 SellBox:AddToggle("AutoSell", {
-    Text    = "Auto Sell",
-    Default = false,
+    Text = "Auto Sell", Default = false,
     Tooltip = "Automatically sells full inventory",
 })
-local SellStatus = SellBox:AddLabel("Status: Idle")
+local setSell = statusSetter(SellBox:AddLabel("Status: Idle"))
 
--- ── Seed Shop ────────────────────────────────
+-- ── Seed Shop ──
 ShopBox:AddDropdown("ShopSeeds", {
-    Text     = "Seeds to Buy",
-    Values   = SEEDS,
-    Multi    = true,
-    Default  = 1,
-    Tooltip  = "Pick one or more seeds to auto-buy",
+    Text = "Seeds to Buy", Values = SEEDS, Multi = true, Default = 1,
+    Tooltip = "Pick one or more seeds to auto-buy",
 })
 ShopBox:AddToggle("AutoBuy", {
-    Text    = "Auto Buy",
-    Default = false,
+    Text = "Auto Buy", Default = false,
     Tooltip = "Continuously buys all selected seeds that are in stock",
 })
-local BuyStatus = ShopBox:AddLabel("Status: Idle")
+local setBuy = statusSetter(ShopBox:AddLabel("Status: Idle"))
 
--- ── Gear Shop ────────────────────────────────
+-- ── Gear Shop ──
 GearShopBox:AddDropdown("ShopGear", {
-    Text    = "Gear to Buy",
-    Values  = GEAR,
-    Multi   = true,
-    Default = 1,
+    Text = "Gear to Buy", Values = GEAR, Multi = true, Default = 1,
     Tooltip = "Pick one or more gear items to auto-buy",
 })
 GearShopBox:AddToggle("AutoBuyGear", {
-    Text    = "Auto Buy Gear",
-    Default = false,
+    Text = "Auto Buy Gear", Default = false,
     Tooltip = "Continuously buys all selected gear that is in stock",
 })
-local GearBuyStatus = GearShopBox:AddLabel("Status: Idle")
+local setGearBuy = statusSetter(GearShopBox:AddLabel("Status: Idle"))
 
--- ── Prop / Crate Shop ────────────────────────
+-- ── Prop / Crate Shop ──
 CrateShopBox:AddDropdown("ShopCrates", {
-    Text    = "Crates to Buy",
-    Values  = CRATES,
-    Multi   = true,
-    Default = 1,
+    Text = "Crates to Buy", Values = CRATES, Multi = true, Default = 1,
     Tooltip = "Pick one or more crates to auto-buy (crates open into props)",
 })
 CrateShopBox:AddToggle("AutoBuyCrate", {
-    Text    = "Auto Buy Crates",
-    Default = false,
+    Text = "Auto Buy Crates", Default = false,
     Tooltip = "Continuously buys all selected crates that are in stock",
 })
-local CrateBuyStatus = CrateShopBox:AddLabel("Status: Idle")
+local setCrateBuy = statusSetter(CrateShopBox:AddLabel("Status: Idle"))
 
--- ── Auto Plant ───────────────────────────────
+-- ── Auto Plant ──
 PlantBox:AddDropdown("PlantSeeds", {
-    Text     = "Seeds to Plant",
-    Values   = SEEDS,
-    Multi    = true,
-    Default  = 1,
-    Tooltip  = "Pick which seeds to plant (matched against your backpack)",
+    Text = "Seeds to Plant", Values = SEEDS, Multi = true, Default = 1,
+    Tooltip = "Pick which seeds to plant (matched against your backpack)",
 })
 PlantBox:AddToggle("AutoPlant", {
-    Text    = "Auto Plant",
-    Default = false,
-    Tooltip = "Plants selected seeds at random points on your plot (no need to hold them)",
+    Text = "Auto Plant", Default = false,
+    Tooltip = "Plants selected seeds at random points on your plot",
 })
-local PlantStatus = PlantBox:AddLabel("Status: Idle")
+local setPlant = statusSetter(PlantBox:AddLabel("Status: Idle"))
 
--- ── Auto Pet ──────────────────────────────────
+-- ── Auto Pet ──
 PetBox:AddDropdown("PetTypes", {
-    Text     = "Pets to Buy",
-    Values   = PETS,
-    Multi    = true,
-    Default  = 1,
-    Tooltip  = "Pick which wild pet types to auto-buy (leave as-is to buy all)",
+    Text = "Pets to Buy", Values = PETS, Multi = true, Default = 1,
+    Tooltip = "Pick which wild pet types to auto-buy",
 })
 PetBox:AddToggle("BuyAllPets", {
-    Text    = "Buy All Pet Types",
-    Default = true,
+    Text = "Buy All Pet Types", Default = true,
     Tooltip = "Ignore the dropdown and buy every wild pet that spawns",
 })
 PetBox:AddToggle("AutoPet", {
-    Text    = "Auto Buy Pets",
-    Default = false,
+    Text = "Auto Buy Pets", Default = false,
     Tooltip = "Teleports to each wild pet, buys it, then returns you",
 })
 PetBox:AddToggle("PetReturn", {
-    Text    = "Return After Buying",
-    Default = true,
+    Text = "Return After Buying", Default = true,
     Tooltip = "Snap back to your start position after each buy pass",
 })
-local PetStatus = PetBox:AddLabel("Status: Idle")
+local setPet = statusSetter(PetBox:AddLabel("Status: Idle"))
 
--- ── Auto Drops ───────────────────────────────
+-- ── Auto Drops ──
 DropsBox:AddToggle("DropsReturn", {
-    Text    = "Return After Collecting",
-    Default = true,
+    Text = "Return After Collecting", Default = true,
     Tooltip = "Snap back to your start position after each sweep",
 })
 DropsBox:AddToggle("AutoDrops", {
-    Text    = "Auto Collect Drops",
-    Default = false,
+    Text = "Auto Collect Drops", Default = false,
     Tooltip = "Teleports to and collects DroppedItems and SeedPack spawns",
 })
-local DropsStatus = DropsBox:AddLabel("Status: Idle")
+local setDrops = statusSetter(DropsBox:AddLabel("Status: Idle"))
 
 -- =============================================
 --  MAILBOX TAB
 -- =============================================
-local MailTab     = Window:AddTab("Mailbox", "mail")
-local MailBox     = MailTab:AddLeftGroupbox("Send Gifts")
-local MailCatBox  = MailTab:AddRightGroupbox("What to Send")
-local WebhookBox  = MailTab:AddRightGroupbox("Discord Webhook")
+local MailTab    = Window:AddTab("Mailbox", "mail")
+local MailBox    = MailTab:AddLeftGroupbox("Send Gifts")
+local MailCatBox = MailTab:AddRightGroupbox("What to Send")
+local WebhookBox = MailTab:AddRightGroupbox("Discord Webhook")
 
 MailBox:AddInput("MailTarget", {
-    Text        = "Recipient Username",
-    Default     = "",
+    Text = "Recipient Username", Default = "",
     Placeholder = "username (not display name)",
-    Numeric     = false,
-    Finished    = false,
-    Tooltip     = "Exact Roblox username to send gifts to",
+    Numeric = false, Finished = false,
+    Tooltip = "Exact Roblox username to send gifts to",
 })
-
 MailBox:AddInput("MailNote", {
-    Text        = "Note (optional)",
-    Default     = "",
-    Placeholder = "optional message",
-    Numeric     = false,
-    Finished    = false,
+    Text = "Note (optional)", Default = "",
+    Placeholder = "optional message", Numeric = false, Finished = false,
 })
-
 MailBox:AddSlider("MailBatchSize", {
-    Text     = "Items per Send",
-    Default  = 20,
-    Min      = 1,
-    Max      = 20,
-    Rounding = 0,
-    Suffix   = "x",
-    Tooltip  = "How many items to send per batch (server max is 20)",
+    Text = "Items per Send", Default = 20, Min = 1, Max = 20,
+    Rounding = 0, Suffix = "x", Tooltip = "How many items to send per batch (server max is 20)",
 })
-
 MailBox:AddButton({
     Text = "Send Once",
-    Func = function()
-        _G._gag_mail_once = true
-    end,
+    Func = function() _G._gag_mail_once = true end,
 })
-
 MailBox:AddToggle("AutoMail", {
-    Text    = "Auto Send",
-    Default = false,
+    Text = "Auto Send", Default = false,
     Tooltip = "Continuously sends your inventory until empty",
 })
-
-local MailStatus = MailBox:AddLabel("Status: Idle")
+local setMail = statusSetter(MailBox:AddLabel("Status: Idle"))
 
 MailCatBox:AddDropdown("MailCats", {
-    Text    = "Categories",
-    Values  = GIFTABLE_CATEGORIES,
-    Multi   = true,
-    Default = 1,
+    Text = "Categories", Values = GIFTABLE_CATEGORIES, Multi = true, Default = 1,
     Tooltip = "Which item categories to send",
 })
-
 MailCatBox:AddToggle("MailAllCats", {
-    Text    = "Send All Categories",
-    Default = true,
+    Text = "Send All Categories", Default = true,
     Tooltip = "Ignore the dropdown and send everything giftable",
 })
-
 MailCatBox:AddToggle("MailSkipPets", {
-    Text    = "Skip Pets",
-    Default = true,
-    Tooltip = "Don't send pets (safety so you don't gift away pets by accident)",
+    Text = "Skip Pets", Default = true,
+    Tooltip = "Don't send pets (safety)",
 })
-
 MailCatBox:AddToggle("MailWaitFull", {
-    Text    = "Wait Until Full",
-    Default = false,
-    Tooltip = "Only send once you have a full batch (Items per Send). Otherwise sends whatever is available.",
+    Text = "Wait Until Full", Default = false,
+    Tooltip = "Only send once you have a full batch",
 })
 
--- Discord webhook config
 WebhookBox:AddInput("WebhookUrl", {
-    Text        = "Webhook URL",
-    Default     = "",
+    Text = "Webhook URL", Default = "",
     Placeholder = "https://discord.com/api/webhooks/...",
-    Numeric     = false,
-    Finished    = false,
-    Tooltip     = "Discord webhook to notify when mail is sent",
+    Numeric = false, Finished = false,
+    Tooltip = "Discord webhook to notify when mail is sent",
 })
-
 WebhookBox:AddToggle("WebhookEnabled", {
-    Text    = "Send Webhook on Mail",
-    Default = false,
+    Text = "Send Webhook on Mail", Default = false,
     Tooltip = "Post a summary to Discord each time a gift batch is sent",
 })
-
 WebhookBox:AddButton({
     Text = "Test Webhook",
-    Func = function()
-        _G._gag_webhook_test = true
-    end,
+    Func = function() _G._gag_webhook_test = true end,
 })
 
 -- =============================================
---  TIMINGS TAB  (all delays/intervals live here)
+--  TIMINGS TAB
 -- =============================================
-local TimingsTab = Window:AddTab("Timings", "timer")
+local TimingsTab  = Window:AddTab("Timings", "timer")
 local FarmTimings = TimingsTab:AddLeftGroupbox("Farming")
 local ShopTimings = TimingsTab:AddRightGroupbox("Shops & Mail")
 
@@ -374,7 +300,7 @@ FarmTimings:AddSlider("HarvestDelay", {
 })
 FarmTimings:AddSlider("PlantDelay", {
     Text = "Plant Delay", Default = 0.07, Min = 0.05, Max = 1.0,
-    Rounding = 2, Suffix = "s", Tooltip = "Delay between each plant (0.05 = server floor)",
+    Rounding = 2, Suffix = "s", Tooltip = "Delay between each plant",
 })
 FarmTimings:AddSlider("PetDelay", {
     Text = "Pet Buy Delay", Default = 0.2, Min = 0.05, Max = 2.0,
@@ -403,7 +329,48 @@ ShopTimings:AddSlider("SellInterval", {
 })
 ShopTimings:AddSlider("MailInterval", {
     Text = "Mail Send Interval", Default = 2, Min = 1.5, Max = 15,
-    Rounding = 1, Suffix = "s", Tooltip = "Time between mail batches (server cooldown 1.5s)",
+    Rounding = 1, Suffix = "s", Tooltip = "Time between mail batches",
+})
+
+-- =============================================
+--  PERFORMANCE TAB  (Potato Mode)
+-- =============================================
+local PerfTab    = Window:AddTab("Performance", "zap")
+local PerfBox    = PerfTab:AddLeftGroupbox("Potato Mode")
+local PerfFineBox = PerfTab:AddRightGroupbox("Fine Control")
+
+PerfBox:AddToggle("PotatoMode", {
+    Text    = "Potato Mode",
+    Default = false,
+    Tooltip = "Master switch: lowest render quality, no shadows, no effects, near view distance",
+})
+PerfBox:AddSlider("ViewDistance", {
+    Text    = "View Distance",
+    Default = 250, Min = 40, Max = 2500,
+    Rounding = 0, Suffix = " studs",
+    Tooltip = "Fades distant geometry out with fog. Lower = less to render.",
+})
+local setPerf = statusSetter(PerfBox:AddLabel("Status: Off"))
+
+PerfFineBox:AddToggle("KillEffects", {
+    Text    = "Disable Particles / Trails / Beams",
+    Default = true,
+    Tooltip = "Turns off ParticleEmitters, Trails, Beams, Fire, Smoke, Sparkles",
+})
+PerfFineBox:AddToggle("NoShadows", {
+    Text    = "Disable Shadows",
+    Default = true,
+    Tooltip = "Turns off global shadows",
+})
+PerfFineBox:AddToggle("LowQuality", {
+    Text    = "Force Lowest Quality",
+    Default = true,
+    Tooltip = "Sets render QualityLevel to Level01",
+})
+PerfFineBox:AddToggle("NoTerrainDecor", {
+    Text    = "Disable Terrain Decoration",
+    Default = true,
+    Tooltip = "Turns off grass/water detail on terrain",
 })
 
 -- =============================================
@@ -414,22 +381,37 @@ local ThemeBox    = SettingsTab:AddLeftGroupbox("Theme")
 local AntiAfkBox  = SettingsTab:AddLeftGroupbox("Anti-AFK")
 
 AntiAfkBox:AddToggle("AntiAfk", {
-    Text    = "Anti-AFK",
-    Default = true,
+    Text = "Anti-AFK", Default = true,
     Tooltip = "Stops the game from hopping you to a new server when idle",
 })
-
 AntiAfkBox:AddButton({
-    Text    = "Hop Server",
+    Text = "Hop Server",
     Tooltip = "Immediately hops you to a new server",
-    Func    = function()
-        pcall(function()
-            Networking.AntiAfk.RequestHop:Fire()
-        end)
+    Func = function()
+        pcall(function() Networking.AntiAfk.RequestHop:Fire() end)
     end,
 })
+AntiAfkBox:AddToggle("AutoHop", {
+    Text    = "Auto Hop (timed)",
+    Default = false,
+    Tooltip = "Automatically hops to a new server on a timer",
+})
+AntiAfkBox:AddSlider("HopInterval", {
+    Text    = "Hop Interval",
+    Default = 15, Min = 1, Max = 120,
+    Rounding = 0, Suffix = " min",
+    Tooltip = "How often to auto-hop (default 15 minutes)",
+})
+local setAntiAfk = statusSetter(AntiAfkBox:AddLabel("Status: On"))
+local setHop     = statusSetter(AntiAfkBox:AddLabel("Auto Hop: Off"))
 
-local AntiAfkStatus = AntiAfkBox:AddLabel("Status: On")
+local LoadBox = SettingsTab:AddLeftGroupbox("Loading Screen")
+LoadBox:AddToggle("SkipLoading", {
+    Text    = "Auto Skip Loading Screen",
+    Default = true,
+    Tooltip = "Automatically dismisses the 'click to skip' loading screen on join / after hopping",
+})
+local setLoad = statusSetter(LoadBox:AddLabel("Status: Watching"))
 
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
@@ -456,13 +438,10 @@ local function getMyPlot()
         local plants = plot:FindFirstChild("Plants")
         if plants then
             for _, pf in ipairs(plants:GetChildren()) do
-                if pf.Name:sub(1, #uid) == uid then
-                    return plot
-                end
+                if pf.Name:sub(1, #uid) == uid then return plot end
             end
         end
     end
-
     return nil
 end
 
@@ -476,12 +455,8 @@ local function getSeedToolMatching(wanted)
             if t:IsA("Tool") then
                 local seedType = t:GetAttribute("SeedTool")
                 if seedType ~= nil then
-                    if not wanted or not next(wanted) then
-                        return t, seedType
-                    end
-                    if wanted[tostring(seedType)] then
-                        return t, seedType
-                    end
+                    if not wanted or not next(wanted) then return t, seedType end
+                    if wanted[tostring(seedType)] then return t, seedType end
                 end
             end
         end
@@ -491,9 +466,7 @@ local function getSeedToolMatching(wanted)
     local char = player.Character
     local t, seedType = scan(char)
     if t then return t, seedType end
-
-    local bp = player:FindFirstChildOfClass("Backpack")
-    return scan(bp)
+    return scan(player:FindFirstChildOfClass("Backpack"))
 end
 
 -- =============================================
@@ -503,7 +476,6 @@ local function getPlantAreas(plot)
     local areas = {}
     local visual = plot:FindFirstChild("Visual")
     if not visual then return areas end
-
     for _, child in ipairs(visual:GetChildren()) do
         if child:IsA("BasePart") and child.Name:find("PlantAreaColumn") then
             table.insert(areas, child)
@@ -516,13 +488,11 @@ local function randomPointOnPart(part)
     local size = part.Size
     local offX = (math.random() - 0.5) * size.X
     local offZ = (math.random() - 0.5) * size.Z
-    local localPoint = Vector3.new(offX, size.Y / 2, offZ)
-    return part.CFrame:PointToWorldSpace(localPoint)
+    return part.CFrame:PointToWorldSpace(Vector3.new(offX, size.Y / 2, offZ))
 end
 
 -- =============================================
 --  STOCK HELPER
---  Reads "xN in Stock" from each item's GUI in the shop frame.
 -- =============================================
 local PlayerGui = player:WaitForChild("PlayerGui")
 
@@ -541,12 +511,9 @@ local function getStock(shopGuiName, itemName)
 
     local costText = entry:FindFirstChild("Cost_Text", true)
     if costText and costText:IsA("TextLabel") then
-        if tostring(costText.Text):upper():find("NO STOCK") then
-            return 0
-        end
+        if tostring(costText.Text):upper():find("NO STOCK") then return 0 end
         return 1
     end
-
     return nil
 end
 
@@ -557,47 +524,89 @@ local function inStock(shopGuiName, itemName)
 end
 
 -- =============================================
---  HARVEST LOGIC
---  Only fires prompts that are Enabled (a ready crop). Firing every
---  prompt every sweep — including not-ready or already-harvested ones —
---  floods the request/response Packet and causes "ResponseReads" errors.
---  We also de-dupe within a sweep so each prompt fires at most once.
+--  HARVEST LOGIC  (indexed — no GetDescendants on a timer)
+--  We scan the plant folder ONCE, cache every ProximityPrompt in a
+--  table, and keep it current via DescendantAdded/Removing. The per-tick
+--  harvest then just walks the cached table, allocating nothing.
 -- =============================================
-local function harvestAll()
-    local gardens = workspace:FindFirstChild("Gardens")
-    if not gardens then
-        HarvestStatus:SetText("Status: No Gardens found")
-        return
-    end
+local harvestPrompts = {}   -- [ProximityPrompt] = true
+local boundPlants
+local harvestConns = {}
 
-    local triggered = 0
-    local seen = {}
+local function bindHarvest()
+    local plot   = getMyPlot()
+    local plants = plot and plot:FindFirstChild("Plants")
+    if not plants then return false end
+    if plants == boundPlants then return true end
 
-    for _, plot in ipairs(gardens:GetChildren()) do
-        local plants = plot:FindFirstChild("Plants")
-        if not plants then continue end
+    -- rebind to a new/changed Plants folder
+    for _, c in ipairs(harvestConns) do pcall(function() c:Disconnect() end) end
+    table.clear(harvestConns)
+    table.clear(harvestPrompts)
+    boundPlants = plants
 
-        for _, playerFolder in ipairs(plants:GetChildren()) do
-            if playerFolder.Name:sub(1, #uid) ~= uid then continue end
-
-            for _, desc in ipairs(playerFolder:GetDescendants()) do
-                if not Alive() or not Toggles.AutoHarvest.Value then return end
-
-                if desc:IsA("ProximityPrompt") and desc.Enabled and not seen[desc] then
-                    seen[desc] = true
-                    pcall(function() fireproximityprompt(desc) end)
-                    triggered = triggered + 1
-                    task.wait(Options.HarvestDelay.Value)
-                end
+    for _, pf in ipairs(plants:GetChildren()) do
+        if pf.Name:sub(1, #uid) == uid then
+            for _, d in ipairs(pf:GetDescendants()) do
+                if d:IsA("ProximityPrompt") then harvestPrompts[d] = true end
             end
         end
     end
 
-    if triggered > 0 then
-        HarvestStatus:SetText("Status: Got " .. triggered .. " crops")
-    else
-        HarvestStatus:SetText("Status: Nothing ready")
+    harvestConns[#harvestConns + 1] = plants.DescendantAdded:Connect(function(d)
+        if d:IsA("ProximityPrompt") then
+            local pf = d:FindFirstAncestorWhichIsA("Folder")
+            -- accept anything under our owned subfolders
+            if d:FindFirstAncestor(uid) or (pf and pf.Name:sub(1, #uid) == uid) then
+                harvestPrompts[d] = true
+            else
+                harvestPrompts[d] = true -- plot is ours; keep simple
+            end
+        end
+    end)
+    harvestConns[#harvestConns + 1] = plants.DescendantRemoving:Connect(function(d)
+        harvestPrompts[d] = nil
+    end)
+
+    return true
+end
+
+local _harvestScratch = {}  -- reused snapshot array (no per-sweep allocation churn)
+
+local function harvestAll()
+    if not bindHarvest() then
+        setHarvest("Status: No plot found")
+        return
     end
+
+    -- Snapshot keys first. We yield (task.wait) inside the fire loop below,
+    -- and the DescendantAdded/Removing connections mutate harvestPrompts during
+    -- those yields. Iterating the live table across a yield invalidates the
+    -- `next` iterator ("invalid key to 'next'"), so we walk a snapshot instead.
+    -- This pairs() pass does NOT yield, so it's safe.
+    table.clear(_harvestScratch)
+    local n = 0
+    for prompt in pairs(harvestPrompts) do
+        if prompt.Parent then
+            n = n + 1
+            _harvestScratch[n] = prompt
+        else
+            harvestPrompts[prompt] = nil  -- stale; safe to clear current/other keys, no yield here
+        end
+    end
+
+    local triggered = 0
+    for i = 1, n do
+        if not Alive() or not Toggles.AutoHarvest.Value then return end
+        local prompt = _harvestScratch[i]
+        if prompt.Parent and prompt.Enabled then
+            pcall(fireproximityprompt, prompt)
+            triggered = triggered + 1
+            task.wait(Options.HarvestDelay.Value)
+        end
+    end
+
+    setHarvest(triggered > 0 and ("Status: Got " .. triggered .. " crops") or "Status: Nothing ready")
 end
 
 -- =============================================
@@ -605,175 +614,113 @@ end
 -- =============================================
 local function trySell()
     local preview = nil
-    pcall(function()
-        preview = Networking.NPCS.PreviewSellAll:Fire()
-    end)
-
-    if not preview then
-        SellStatus:SetText("Status: Preview failed")
-        return
-    end
+    pcall(function() preview = Networking.NPCS.PreviewSellAll:Fire() end)
+    if not preview then setSell("Status: Preview failed") return end
 
     local fruitCount = preview.FruitCount or 0
-    if fruitCount == 0 then
-        SellStatus:SetText("Status: Nothing to sell")
-        return
-    end
+    if fruitCount == 0 then setSell("Status: Nothing to sell") return end
 
     local result = nil
-    pcall(function()
-        result = Networking.NPCS.SellAll:Fire()
-    end)
+    pcall(function() result = Networking.NPCS.SellAll:Fire() end)
 
     if result and result.Success then
-        SellStatus:SetText(string.format("Status: Sold %d items", result.SoldCount or fruitCount))
+        setSell(string.format("Status: Sold %d items", result.SoldCount or fruitCount))
     else
-        SellStatus:SetText("Status: Failed / cooldown")
+        setSell("Status: Failed / cooldown")
     end
 end
 
 -- =============================================
---  BUY LOGIC (Seed Shop) — skips out-of-stock seeds
+--  BUY LOGIC (Seed Shop) — reuses its list table
 -- =============================================
 local _seedBuyList  = {}
 local _seedBuyIndex = 1
 
 local function tryBuy()
     local selected = Options.ShopSeeds.Value
-    if not selected or not next(selected) then
-        BuyStatus:SetText("Status: No seeds selected")
-        return
-    end
+    if not selected or not next(selected) then setBuy("Status: No seeds selected") return end
 
-    _seedBuyList = {}
+    table.clear(_seedBuyList)
     for seed, active in pairs(selected) do
         if active then table.insert(_seedBuyList, seed) end
     end
     if #_seedBuyList == 0 then return end
 
-    local tries = 0
-    local seed = nil
+    local tries, seed = 0, nil
     while tries < #_seedBuyList do
         if _seedBuyIndex > #_seedBuyList then _seedBuyIndex = 1 end
         local candidate = _seedBuyList[_seedBuyIndex]
         _seedBuyIndex = _seedBuyIndex + 1
         tries = tries + 1
-        if inStock("SeedShop", candidate) then
-            seed = candidate
-            break
-        end
+        if inStock("SeedShop", candidate) then seed = candidate break end
     end
 
-    if not seed then
-        BuyStatus:SetText("Status: All out of stock")
-        return
-    end
+    if not seed then setBuy("Status: All out of stock") return end
 
-    local ok = pcall(function()
-        Networking.SeedShop.PurchaseSeed:Fire(seed)
-    end)
-
-    if ok then
-        BuyStatus:SetText("Status: Bought " .. seed)
-    else
-        BuyStatus:SetText("Status: Failed / cooldown")
-    end
+    local ok = pcall(function() Networking.SeedShop.PurchaseSeed:Fire(seed) end)
+    setBuy(ok and ("Status: Bought " .. seed) or "Status: Failed / cooldown")
 end
 
 -- =============================================
---  BUY LOGIC (Gear Shop) — skips out-of-stock gear
+--  BUY LOGIC (Gear Shop)
 -- =============================================
 local _gearBuyList  = {}
 local _gearBuyIndex = 1
 
 local function tryBuyGear()
     local selected = Options.ShopGear.Value
-    if not selected or not next(selected) then
-        GearBuyStatus:SetText("Status: No gear selected")
-        return
-    end
+    if not selected or not next(selected) then setGearBuy("Status: No gear selected") return end
 
-    _gearBuyList = {}
+    table.clear(_gearBuyList)
     for gear, active in pairs(selected) do
         if active then table.insert(_gearBuyList, gear) end
     end
     if #_gearBuyList == 0 then return end
 
-    local tries = 0
-    local gear = nil
+    local tries, gear = 0, nil
     while tries < #_gearBuyList do
         if _gearBuyIndex > #_gearBuyList then _gearBuyIndex = 1 end
         local candidate = _gearBuyList[_gearBuyIndex]
         _gearBuyIndex = _gearBuyIndex + 1
         tries = tries + 1
-        if inStock("GearShop", candidate) then
-            gear = candidate
-            break
-        end
+        if inStock("GearShop", candidate) then gear = candidate break end
     end
 
-    if not gear then
-        GearBuyStatus:SetText("Status: All out of stock")
-        return
-    end
+    if not gear then setGearBuy("Status: All out of stock") return end
 
-    local ok = pcall(function()
-        Networking.GearShop.PurchaseGear:Fire(gear)
-    end)
-
-    if ok then
-        GearBuyStatus:SetText("Status: Bought " .. gear)
-    else
-        GearBuyStatus:SetText("Status: Failed / cooldown")
-    end
+    local ok = pcall(function() Networking.GearShop.PurchaseGear:Fire(gear) end)
+    setGearBuy(ok and ("Status: Bought " .. gear) or "Status: Failed / cooldown")
 end
 
 -- =============================================
---  BUY LOGIC (Prop / Crate Shop) — skips out-of-stock crates
+--  BUY LOGIC (Prop / Crate Shop)
 -- =============================================
 local _crateBuyList  = {}
 local _crateBuyIndex = 1
 
 local function tryBuyCrate()
     local selected = Options.ShopCrates.Value
-    if not selected or not next(selected) then
-        CrateBuyStatus:SetText("Status: No crates selected")
-        return
-    end
+    if not selected or not next(selected) then setCrateBuy("Status: No crates selected") return end
 
-    _crateBuyList = {}
+    table.clear(_crateBuyList)
     for crate, active in pairs(selected) do
         if active then table.insert(_crateBuyList, crate) end
     end
     if #_crateBuyList == 0 then return end
 
-    local tries = 0
-    local crate = nil
+    local tries, crate = 0, nil
     while tries < #_crateBuyList do
         if _crateBuyIndex > #_crateBuyList then _crateBuyIndex = 1 end
         local candidate = _crateBuyList[_crateBuyIndex]
         _crateBuyIndex = _crateBuyIndex + 1
         tries = tries + 1
-        if inStock("CrateShop", candidate) then
-            crate = candidate
-            break
-        end
+        if inStock("CrateShop", candidate) then crate = candidate break end
     end
 
-    if not crate then
-        CrateBuyStatus:SetText("Status: All out of stock")
-        return
-    end
+    if not crate then setCrateBuy("Status: All out of stock") return end
 
-    local ok = pcall(function()
-        Networking.CrateShop.PurchaseCrate:Fire(crate)
-    end)
-
-    if ok then
-        CrateBuyStatus:SetText("Status: Bought " .. crate)
-    else
-        CrateBuyStatus:SetText("Status: Failed / cooldown")
-    end
+    local ok = pcall(function() Networking.CrateShop.PurchaseCrate:Fire(crate) end)
+    setCrateBuy(ok and ("Status: Bought " .. crate) or "Status: Failed / cooldown")
 end
 
 -- =============================================
@@ -781,49 +728,36 @@ end
 -- =============================================
 local function tryPlant()
     local plot = getMyPlot()
-    if not plot then
-        PlantStatus:SetText("Status: No plot found")
-        return
-    end
+    if not plot then setPlant("Status: No plot found") return end
 
     local wanted = Options.PlantSeeds.Value
     local tool, seedType = getSeedToolMatching(wanted)
-    if not tool then
-        PlantStatus:SetText("Status: No matching seed in bag")
-        return
-    end
+    if not tool then setPlant("Status: No matching seed in bag") return end
 
     local areas = getPlantAreas(plot)
-    if #areas == 0 then
-        PlantStatus:SetText("Status: No PlantAreaColumn found")
-        return
-    end
+    if #areas == 0 then setPlant("Status: No PlantAreaColumn found") return end
 
     local area = areas[math.random(1, #areas)]
     local pos  = randomPointOnPart(area)
 
-    local ok = pcall(function()
-        Networking.Plant.PlantSeed:Fire(pos, seedType, tool)
-    end)
-
-    if ok then
-        PlantStatus:SetText("Status: Planted " .. tostring(seedType))
-    else
-        PlantStatus:SetText("Status: Fire error")
-    end
+    local ok = pcall(function() Networking.Plant.PlantSeed:Fire(pos, seedType, tool) end)
+    setPlant(ok and ("Status: Planted " .. tostring(seedType)) or "Status: Fire error")
 end
 
 -- =============================================
---  PET BUY LOGIC (hardened)
+--  SHARED CHARACTER HELPER
 -- =============================================
-local function petTypeFromName(name)
-    return name:match("^WildPet_([%w]+)_")
-end
-
 local function getRoot()
     local char = player.Character
     if not char then return nil end
     return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+end
+
+-- =============================================
+--  PET BUY LOGIC  (closures hoisted to module scope)
+-- =============================================
+local function petTypeFromName(name)
+    return name:match("^WildPet_([%w]+)_")
 end
 
 local function collectPetPrompts()
@@ -866,21 +800,14 @@ local function collectPetPrompts()
 end
 
 local function buyOnePet(entry)
-    local prompt = entry.prompt
-    local part   = entry.part
-
-    if not prompt or not prompt.Parent or not part or not part.Parent then
-        return false
-    end
+    local prompt, part = entry.prompt, entry.part
+    if not prompt or not prompt.Parent or not part or not part.Parent then return false end
 
     local r = getRoot()
     if not r then return false end
 
-    pcall(function()
-        r.CFrame = part.CFrame + Vector3.new(0, 3, 0)
-    end)
+    pcall(function() r.CFrame = part.CFrame + Vector3.new(0, 3, 0) end)
     task.wait(0.12)
-
     if not prompt.Parent then return false end
 
     local oldHold = prompt.HoldDuration
@@ -897,38 +824,27 @@ local function buyOnePet(entry)
     pcall(function()
         if prompt and prompt.Parent then prompt.HoldDuration = oldHold end
     end)
-
     return fired
+end
+
+local function returnTo(returnCF, enabled)
+    if not enabled then return end
+    for _ = 1, 3 do
+        local r = getRoot()
+        if r then pcall(function() r.CFrame = returnCF end) end
+        task.wait(0.05)
+    end
 end
 
 local function tryBuyPets()
     local root = getRoot()
-    if not root then
-        PetStatus:SetText("Status: No character")
-        return
-    end
+    if not root then setPet("Status: No character") return end
 
     local returnCF = root.CFrame
 
-    local function alwaysReturnPet()
-        if not Toggles.PetReturn.Value then return end
-        for _ = 1, 3 do
-            local r = getRoot()
-            if r then pcall(function() r.CFrame = returnCF end) end
-            task.wait(0.05)
-        end
-    end
-
     local list, err = collectPetPrompts()
-    if not list then
-        PetStatus:SetText("Status: " .. tostring(err))
-        return
-    end
-
-    if #list == 0 then
-        PetStatus:SetText("Status: No pets around")
-        return
-    end
+    if not list then setPet("Status: " .. tostring(err)) return end
+    if #list == 0 then setPet("Status: No pets around") return end
 
     table.sort(list, function(a, b)
         return (a.part.Position - returnCF.Position).Magnitude
@@ -936,111 +852,85 @@ local function tryBuyPets()
     end)
 
     local entry = list[1]
-    PetStatus:SetText("Status: Buying " .. (entry.ptype or "pet"))
+    setPet("Status: Buying " .. (entry.ptype or "pet"))
 
     local bought = false
     pcall(function() bought = buyOnePet(entry) end)
+    setPet(bought and ("Status: Bought " .. (entry.ptype or "pet")) or "Status: Buy failed, will retry")
 
-    if bought then
-        PetStatus:SetText("Status: Bought " .. (entry.ptype or "pet"))
-    else
-        PetStatus:SetText("Status: Buy failed, will retry")
-    end
-
-    alwaysReturnPet()
+    returnTo(returnCF, Toggles.PetReturn.Value)
 end
 
 -- =============================================
---  AUTO DROPS LOGIC
+--  AUTO DROPS LOGIC  (closures hoisted)
 -- =============================================
+local function scanContainerPrompts(container, out)
+    if not container then return end
+    for _, desc in ipairs(container:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") and desc.Enabled then
+            local part = desc.Parent
+            if not (part and part:IsA("BasePart")) then
+                part = desc:FindFirstAncestorWhichIsA("BasePart")
+            end
+            if part then table.insert(out, { prompt = desc, part = part }) end
+        end
+    end
+end
+
+local function guaranteedFire(prompt)
+    if not prompt or not prompt.Parent then return false end
+    local oldHold = 0
+    pcall(function() oldHold = prompt.HoldDuration; prompt.HoldDuration = 0 end)
+
+    local fired = false
+    for _ = 1, 3 do
+        if not prompt.Parent then break end
+        local ok = pcall(function() fireproximityprompt(prompt) end)
+        if ok then fired = true break end
+        task.wait(0.05)
+    end
+
+    pcall(function()
+        if prompt and prompt.Parent then prompt.HoldDuration = oldHold end
+    end)
+    return fired
+end
+
+local _dropPrompts = {}
+
 local function collectDrops()
     local root = getRoot()
-    if not root then
-        DropsStatus:SetText("Status: No character")
-        return
-    end
+    if not root then setDrops("Status: No character") return end
 
     local returnCF = root.CFrame
 
-    local function alwaysReturn()
-        if not Toggles.DropsReturn.Value then return end
-        local r = getRoot()
-        if r then
-            for _ = 1, 3 do
-                pcall(function() r.CFrame = returnCF end)
-                task.wait(0.05)
-            end
-        end
-    end
-
-    local function scanContainer(container, out)
-        if not container then return end
-        for _, desc in ipairs(container:GetDescendants()) do
-            if desc:IsA("ProximityPrompt") and desc.Enabled then
-                local part = desc.Parent
-                if not (part and part:IsA("BasePart")) then
-                    part = desc:FindFirstAncestorWhichIsA("BasePart")
-                end
-                if part then
-                    table.insert(out, { prompt = desc, part = part })
-                end
-            end
-        end
-    end
-
-    local function guaranteedFire(prompt)
-        if not prompt or not prompt.Parent then return false end
-
-        local oldHold = 0
-        pcall(function()
-            oldHold = prompt.HoldDuration
-            prompt.HoldDuration = 0
-        end)
-
-        local fired = false
-        for _ = 1, 3 do
-            if not prompt.Parent then break end
-            local ok = pcall(function() fireproximityprompt(prompt) end)
-            if ok then fired = true break end
-            task.wait(0.05)
-        end
-
-        pcall(function()
-            if prompt and prompt.Parent then prompt.HoldDuration = oldHold end
-        end)
-
-        return fired
-    end
-
-    local collected = 0
+    table.clear(_dropPrompts)
     pcall(function()
-        local prompts = {}
-        scanContainer(workspace:FindFirstChild("DroppedItems"), prompts)
+        scanContainerPrompts(workspace:FindFirstChild("DroppedItems"), _dropPrompts)
         local map = workspace:FindFirstChild("Map")
         if map then
-            scanContainer(map:FindFirstChild("SeedPackSpawnClient"), prompts)
-            scanContainer(map:FindFirstChild("SeedPackSpawnServerLocations"), prompts)
+            scanContainerPrompts(map:FindFirstChild("SeedPackSpawnClient"), _dropPrompts)
+            scanContainerPrompts(map:FindFirstChild("SeedPackSpawnServerLocations"), _dropPrompts)
         end
+    end)
 
-        if #prompts == 0 then
-            DropsStatus:SetText("Status: Nothing to collect")
-            return
-        end
+    if #_dropPrompts == 0 then
+        setDrops("Status: Nothing to collect")
+        returnTo(returnCF, Toggles.DropsReturn.Value)
+        return
+    end
 
-        table.sort(prompts, function(a, b)
-            return (a.part.Position - returnCF.Position).Magnitude
-                 < (b.part.Position - returnCF.Position).Magnitude
-        end)
+    table.sort(_dropPrompts, function(a, b)
+        return (a.part.Position - returnCF.Position).Magnitude
+             < (b.part.Position - returnCF.Position).Magnitude
+    end)
 
-        for _, entry in ipairs(prompts) do
-            if not Alive() or not Toggles.AutoDrops.Value then break end
+    local collected = 0
+    for _, entry in ipairs(_dropPrompts) do
+        if not Alive() or not Toggles.AutoDrops.Value then break end
 
-            local prompt = entry.prompt
-            local part   = entry.part
-            if not prompt or not prompt.Parent or not part or not part.Parent then
-                continue
-            end
-
+        local prompt, part = entry.prompt, entry.part
+        if prompt and prompt.Parent and part and part.Parent then
             local r = getRoot()
             if not r then break end
 
@@ -1049,21 +939,164 @@ local function collectDrops()
 
             if guaranteedFire(prompt) then
                 collected = collected + 1
-                DropsStatus:SetText("Status: Collecting... (" .. collected .. ")")
+                setDrops("Status: Collecting... (" .. collected .. ")")
             end
-
             task.wait(Options.DropsDelay.Value)
         end
+    end
 
-        if collected > 0 then
-            DropsStatus:SetText("Status: Got " .. collected .. " drop(s)")
-        else
-            DropsStatus:SetText("Status: Nothing collected")
+    setDrops(collected > 0 and ("Status: Got " .. collected .. " drop(s)") or "Status: Nothing collected")
+    returnTo(returnCF, Toggles.DropsReturn.Value)
+end
+
+-- =============================================
+--  PERFORMANCE / POTATO MODE
+-- =============================================
+local EFFECT_CLASSES = {
+    ParticleEmitter = true, Trail = true, Beam = true,
+    Fire = true, Smoke = true, Sparkles = true,
+}
+
+-- saved originals so we can restore on unload / toggle-off
+local _perfSaved = {
+    quality   = nil,
+    shadows   = nil,
+    fogEnd    = nil,
+    fogStart  = nil,
+    terrainDecoration = nil,
+    waterWaveSize = nil,
+    waterReflectance = nil,
+}
+local _perfApplied = false
+local _perfConn = nil
+
+local function saveOriginals()
+    if _perfSaved.quality ~= nil then return end
+    pcall(function() _perfSaved.quality  = settings().Rendering.QualityLevel end)
+    _perfSaved.shadows  = Lighting.GlobalShadows
+    _perfSaved.fogEnd   = Lighting.FogEnd
+    _perfSaved.fogStart = Lighting.FogStart
+    local terrain = workspace:FindFirstChildOfClass("Terrain")
+    if terrain then
+        _perfSaved.terrainDecoration = terrain.Decoration
+        _perfSaved.waterWaveSize     = terrain.WaterWaveSize
+        _perfSaved.waterReflectance  = terrain.WaterReflectance
+    end
+end
+
+local function setEffectsEnabled(enabled)
+    -- one-time sweep; not on a timer
+    pcall(function()
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if EFFECT_CLASSES[d.ClassName] then
+                d.Enabled = enabled
+            end
         end
     end)
-
-    alwaysReturn()
 end
+
+local function applyPotato()
+    saveOriginals()
+
+    if Toggles.LowQuality.Value then
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        end)
+    end
+
+    if Toggles.NoShadows.Value then
+        pcall(function() Lighting.GlobalShadows = false end)
+    end
+
+    -- view distance via fog
+    local vd = Options.ViewDistance.Value
+    pcall(function()
+        Lighting.FogStart = math.max(0, vd - 50)
+        Lighting.FogEnd   = vd
+    end)
+
+    if Toggles.NoTerrainDecor.Value then
+        local terrain = workspace:FindFirstChildOfClass("Terrain")
+        if terrain then
+            pcall(function()
+                terrain.Decoration      = false
+                terrain.WaterWaveSize   = 0
+                terrain.WaterReflectance = 0
+            end)
+        end
+    end
+
+    if Toggles.KillEffects.Value then
+        setEffectsEnabled(false)
+        -- keep new effects suppressed while potato mode is on
+        if not _perfConn then
+            _perfConn = workspace.DescendantAdded:Connect(function(d)
+                if Toggles.PotatoMode.Value and Toggles.KillEffects.Value
+                   and EFFECT_CLASSES[d.ClassName] then
+                    pcall(function() d.Enabled = false end)
+                end
+            end)
+        end
+    end
+
+    _perfApplied = true
+    setPerf("Status: On (" .. math.floor(vd) .. " studs)")
+end
+
+local function restorePerf()
+    if not _perfApplied then setPerf("Status: Off") return end
+
+    if _perfConn then pcall(function() _perfConn:Disconnect() end) _perfConn = nil end
+
+    pcall(function()
+        if _perfSaved.quality ~= nil then
+            settings().Rendering.QualityLevel = _perfSaved.quality
+        end
+    end)
+    if _perfSaved.shadows  ~= nil then pcall(function() Lighting.GlobalShadows = _perfSaved.shadows end) end
+    if _perfSaved.fogEnd   ~= nil then pcall(function() Lighting.FogEnd   = _perfSaved.fogEnd   end) end
+    if _perfSaved.fogStart ~= nil then pcall(function() Lighting.FogStart = _perfSaved.fogStart end) end
+
+    local terrain = workspace:FindFirstChildOfClass("Terrain")
+    if terrain then
+        if _perfSaved.terrainDecoration ~= nil then pcall(function() terrain.Decoration      = _perfSaved.terrainDecoration end) end
+        if _perfSaved.waterWaveSize     ~= nil then pcall(function() terrain.WaterWaveSize    = _perfSaved.waterWaveSize     end) end
+        if _perfSaved.waterReflectance  ~= nil then pcall(function() terrain.WaterReflectance = _perfSaved.waterReflectance  end) end
+    end
+
+    setEffectsEnabled(true)
+
+    _perfApplied = false
+    setPerf("Status: Off")
+end
+
+-- React to the view-distance slider live while potato mode is on
+Options.ViewDistance:OnChanged(function()
+    if Toggles.PotatoMode.Value and _perfApplied then
+        local vd = Options.ViewDistance.Value
+        pcall(function()
+            Lighting.FogStart = math.max(0, vd - 50)
+            Lighting.FogEnd   = vd
+        end)
+        setPerf("Status: On (" .. math.floor(vd) .. " studs)")
+    end
+end)
+
+-- Re-apply if any of the fine toggles change while master is on
+local function reapplyIfOn()
+    if Toggles.PotatoMode.Value then
+        restorePerf()
+        applyPotato()
+    end
+end
+Toggles.KillEffects:OnChanged(reapplyIfOn)
+Toggles.NoShadows:OnChanged(reapplyIfOn)
+Toggles.LowQuality:OnChanged(reapplyIfOn)
+Toggles.NoTerrainDecor:OnChanged(reapplyIfOn)
+
+Toggles.PotatoMode:OnChanged(function()
+    if Toggles.PotatoMode.Value then applyPotato() else restorePerf() end
+end)
 
 -- =============================================
 --  DISCORD WEBHOOK
@@ -1071,8 +1104,7 @@ end
 local function getRequestFn()
     return (syn and syn.request)
         or (http and http.request)
-        or http_request
-        or request
+        or http_request or request
         or (fluxus and fluxus.request)
         or nil
 end
@@ -1086,10 +1118,9 @@ local function sendWebhook(content)
 
     local ok = pcall(function()
         req({
-            Url     = url,
-            Method  = "POST",
+            Url = url, Method = "POST",
             Headers = { ["Content-Type"] = "application/json" },
-            Body    = HttpService:JSONEncode({ content = content }),
+            Body = HttpService:JSONEncode({ content = content }),
         })
     end)
     return ok
@@ -1114,64 +1145,63 @@ local function lookupUser(username)
     return nil
 end
 
--- Builds a batch up to maxItems total count. Returns items, totalCount.
+local _mailItems = {}
+
 local function buildMailBatch(maxItems)
     maxItems = maxItems or 20
     if maxItems > 20 then maxItems = 20 end
 
-    local items = {}
-    if not PlayerStateClient then return items, 0, "No PlayerStateClient" end
+    table.clear(_mailItems)
+    if not PlayerStateClient then return _mailItems, 0, "No PlayerStateClient" end
 
     local replica
     pcall(function() replica = PlayerStateClient:GetLocalReplica() end)
     local inv = replica and replica.Data and replica.Data.Inventory
-    if typeof(inv) ~= "table" then return items, 0, "No inventory" end
+    if typeof(inv) ~= "table" then return _mailItems, 0, "No inventory" end
 
     local sendAll   = Toggles.MailAllCats.Value
     local catFilter = Options.MailCats.Value
     local skipPets  = Toggles.MailSkipPets.Value
 
     local total = 0
-
     for _, cat in ipairs(GIFTABLE_CATEGORIES) do
         if total >= maxItems then break end
-        if cat == "Pets" and skipPets then continue end
-        if not sendAll and not (catFilter and catFilter[cat]) then continue end
-
-        local catTable = inv[cat]
-        if typeof(catTable) ~= "table" then continue end
-
-        if cat == "Pets" or cat == "HarvestedFruits" then
-            for id, entry in pairs(catTable) do
-                if total >= maxItems then break end
-                if typeof(entry) == "table" and entry.Id ~= nil then
-                    if not (cat == "Pets" and entry.Equipped == true) then
-                        table.insert(items, { Category = cat, ItemKey = id, Count = 1 })
-                        total = total + 1
-                    end
-                end
-            end
-        else
-            for itemKey, count in pairs(catTable) do
-                if total >= maxItems then break end
-                if typeof(count) == "number" and count > 0 then
-                    local canAdd = math.min(count, maxItems - total)
-                    if canAdd > 0 then
-                        table.insert(items, { Category = cat, ItemKey = itemKey, Count = canAdd })
-                        total = total + canAdd
+        if not (cat == "Pets" and skipPets) then
+            if sendAll or (catFilter and catFilter[cat]) then
+                local catTable = inv[cat]
+                if typeof(catTable) == "table" then
+                    if cat == "Pets" or cat == "HarvestedFruits" then
+                        for id, entry in pairs(catTable) do
+                            if total >= maxItems then break end
+                            if typeof(entry) == "table" and entry.Id ~= nil then
+                                if not (cat == "Pets" and entry.Equipped == true) then
+                                    table.insert(_mailItems, { Category = cat, ItemKey = id, Count = 1 })
+                                    total = total + 1
+                                end
+                            end
+                        end
+                    else
+                        for itemKey, count in pairs(catTable) do
+                            if total >= maxItems then break end
+                            if typeof(count) == "number" and count > 0 then
+                                local canAdd = math.min(count, maxItems - total)
+                                if canAdd > 0 then
+                                    table.insert(_mailItems, { Category = cat, ItemKey = itemKey, Count = canAdd })
+                                    total = total + canAdd
+                                end
+                            end
+                        end
                     end
                 end
             end
         end
     end
 
-    return items, total
+    return _mailItems, total
 end
 
--- Build a human-readable summary grouped by category
 local function summariseBatch(items, total, username)
-    local byCat = {}
-    local order = {}
+    local byCat, order = {}, {}
     for _, it in ipairs(items) do
         if not byCat[it.Category] then table.insert(order, it.Category) end
         byCat[it.Category] = (byCat[it.Category] or 0) + it.Count
@@ -1182,44 +1212,31 @@ local function summariseBatch(items, total, username)
         table.insert(lines, "• " .. cat .. ": " .. byCat[cat])
     end
 
-    return string.format(
-        "📬 **Mailed %d item(s)** to `%s`\n%s",
-        total, username, table.concat(lines, "\n")
-    )
+    return string.format("📬 **Mailed %d item(s)** to `%s`\n%s",
+        total, username, table.concat(lines, "\n"))
 end
 
 local function sendMailOnce()
     local username = (Options.MailTarget.Value or ""):gsub("^%s*@?(.-)%s*$", "%1")
-    if username == "" then
-        MailStatus:SetText("Status: No recipient")
-        return false
-    end
+    if username == "" then setMail("Status: No recipient") return false end
 
     if #username < 3 or #username > 20 or not username:match("^[%w_]+$") then
-        MailStatus:SetText("Status: Bad username")
-        return false
+        setMail("Status: Bad username") return false
     end
 
     local batchSize = math.floor(Options.MailBatchSize.Value)
     local items, total = buildMailBatch(batchSize)
 
-    if #items == 0 then
-        MailStatus:SetText("Status: Nothing to send")
-        return false
-    end
+    if #items == 0 then setMail("Status: Nothing to send") return false end
 
-    -- Wait Until Full: hold off until we can fill a complete batch
     if Toggles.MailWaitFull.Value and total < batchSize then
-        MailStatus:SetText(string.format("Status: Waiting (%d/%d)", total, batchSize))
+        setMail(string.format("Status: Waiting (%d/%d)", total, batchSize))
         return false
     end
 
-    MailStatus:SetText("Status: Looking up...")
+    setMail("Status: Looking up...")
     local userId = lookupUser(username)
-    if not userId then
-        MailStatus:SetText("Status: User not found")
-        return false
-    end
+    if not userId then setMail("Status: User not found") return false end
 
     local note = Options.MailNote.Value or ""
 
@@ -1228,13 +1245,13 @@ local function sendMailOnce()
     end)
 
     if ok and success then
-        MailStatus:SetText("Status: Sent batch of " .. total)
+        setMail("Status: Sent batch of " .. total)
         if Toggles.WebhookEnabled.Value then
             sendWebhook(summariseBatch(items, total, username))
         end
         return true
     else
-        MailStatus:SetText("Status: " .. (typeof(msg) == "string" and msg ~= "" and msg or "Send failed"))
+        setMail("Status: " .. (typeof(msg) == "string" and msg ~= "" and msg or "Send failed"))
         return false
     end
 end
@@ -1256,23 +1273,137 @@ do
         local VIM = game:GetService("VirtualInputManager")
         while Alive() do
             if Toggles.AntiAfk.Value then
-                pcall(function()
-                    player:SetAttribute("AntiAfkIdleOverride", 1e9)
-                end)
+                pcall(function() player:SetAttribute("AntiAfkIdleOverride", 1e9) end)
                 pcall(function()
                     VIM:SendKeyEvent(true,  Enum.KeyCode.Space, false, game)
                     task.wait(0.05)
                     VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
                 end)
-                AntiAfkStatus:SetText("Status: On (idle blocked)")
+                setAntiAfk("Status: On (idle blocked)")
             else
-                pcall(function()
-                    player:SetAttribute("AntiAfkIdleOverride", 0)
-                end)
-                AntiAfkStatus:SetText("Status: Off")
+                pcall(function() player:SetAttribute("AntiAfkIdleOverride", 0) end)
+                setAntiAfk("Status: Off")
             end
             task.wait(60)
         end
+    end)
+end
+
+-- =============================================
+--  TIMED AUTO HOP  (fires the same RequestHop the button uses)
+-- =============================================
+task.spawn(function()
+    while Alive() do
+        if Toggles.AutoHop.Value then
+            local target = math.max(1, Options.HopInterval.Value) * 60
+            local elapsed = 0
+            -- count down in 1s steps so the slider/toggle stay responsive
+            while Alive() and Toggles.AutoHop.Value and elapsed < target do
+                local remain = target - elapsed
+                local m = math.floor(remain / 60)
+                local s = remain % 60
+                setHop(string.format("Auto Hop: %d:%02d", m, s))
+                task.wait(1)
+                elapsed = elapsed + 1
+            end
+
+            if Alive() and Toggles.AutoHop.Value then
+                setHop("Auto Hop: hopping...")
+                pcall(function() Networking.AntiAfk.RequestHop:Fire() end)
+                -- give the teleport a moment; if it doesn't take, the loop just restarts
+                task.wait(5)
+            end
+        else
+            setHop("Auto Hop: Off")
+            task.wait(1)
+        end
+    end
+end)
+
+-- =============================================
+--  AUTO SKIP LOADING SCREEN  ("click to skip")
+--  Event-driven: catches the prompt on first exec and after each hop,
+--  without polling the GUI tree. Also does one initial sweep in case the
+--  screen is already present when the script runs.
+-- =============================================
+do
+    local SKIP_PATTERNS = { "click to skip", "tap to skip", "skip" }
+    local lastSkip = 0
+
+    local function looksLikeSkip(obj)
+        if not (obj:IsA("TextLabel") or obj:IsA("TextButton")) then return false end
+        local t = tostring(obj.Text):lower()
+        if t == "" then return false end
+        for _, pat in ipairs(SKIP_PATTERNS) do
+            if t:find(pat, 1, true) then return true end
+        end
+        return false
+    end
+
+    local function fireSkip(obj)
+        if not Toggles.SkipLoading.Value then return end
+        if tick() - lastSkip < 1 then return end  -- debounce
+        lastSkip = tick()
+
+        local done = false
+
+        -- 1) If the executor can fire signals, hit the button's click events directly.
+        if typeof(firesignal) == "function" then
+            for _, sigName in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down", "MouseButton1Up" }) do
+                pcall(function()
+                    local sig = obj[sigName]
+                    if sig then firesignal(sig); done = true end
+                end)
+            end
+        end
+
+        -- 2) Fallback / catch-all: simulate a real click at the element's center.
+        --    Many "click to skip" overlays accept a click anywhere, so this also
+        --    covers labels that aren't buttons.
+        pcall(function()
+            local VIM = game:GetService("VirtualInputManager")
+            local pos = obj.AbsolutePosition + obj.AbsoluteSize / 2
+            VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, true,  game, 0)
+            task.wait(0.05)
+            VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+            done = true
+        end)
+
+        setLoad(done and "Status: Skipped loading screen" or "Status: Found skip, click failed")
+    end
+
+    local function sweep()
+        if not Toggles.SkipLoading.Value then return end
+        for _, obj in ipairs(PlayerGui:GetDescendants()) do
+            if looksLikeSkip(obj) and obj.Visible ~= false then
+                fireSkip(obj)
+                return
+            end
+        end
+    end
+
+    -- Watch for the prompt appearing (text is often set just after the
+    -- instance is parented, so defer a beat before checking).
+    PlayerGui.DescendantAdded:Connect(function(d)
+        if not Toggles.SkipLoading.Value then return end
+        if d:IsA("TextLabel") or d:IsA("TextButton") then
+            task.defer(function()
+                task.wait(0.1)
+                if d.Parent and looksLikeSkip(d) and d.Visible ~= false then
+                    fireSkip(d)
+                end
+            end)
+        end
+    end)
+
+    -- Initial bounded sweep for the first few seconds after exec.
+    task.spawn(function()
+        local t0 = tick()
+        while Alive() and tick() - t0 < 20 do
+            if Toggles.SkipLoading.Value then sweep() end
+            task.wait(0.5)
+        end
+        if Toggles.SkipLoading.Value then setLoad("Status: Watching") end
     end)
 end
 
@@ -1281,11 +1412,7 @@ end
 -- =============================================
 task.spawn(function()
     while Alive() do
-        if Toggles.AutoHarvest.Value then
-            harvestAll()
-        else
-            HarvestStatus:SetText("Status: Idle")
-        end
+        if Toggles.AutoHarvest.Value then harvestAll() else setHarvest("Status: Idle") end
         task.wait(0.5)
     end
 end)
@@ -1296,7 +1423,7 @@ task.spawn(function()
             trySell()
             task.wait(math.max(1, Options.SellInterval.Value))
         else
-            SellStatus:SetText("Status: Idle")
+            setSell("Status: Idle")
             task.wait(0.5)
         end
     end
@@ -1308,7 +1435,7 @@ task.spawn(function()
             tryBuy()
             task.wait(math.max(0.1, Options.BuyInterval.Value))
         else
-            BuyStatus:SetText("Status: Idle")
+            setBuy("Status: Idle")
             task.wait(0.5)
         end
     end
@@ -1320,7 +1447,7 @@ task.spawn(function()
             tryBuyGear()
             task.wait(math.max(0.1, Options.GearBuyInterval.Value))
         else
-            GearBuyStatus:SetText("Status: Idle")
+            setGearBuy("Status: Idle")
             task.wait(0.5)
         end
     end
@@ -1332,7 +1459,7 @@ task.spawn(function()
             tryBuyCrate()
             task.wait(math.max(0.1, Options.CrateBuyInterval.Value))
         else
-            CrateBuyStatus:SetText("Status: Idle")
+            setCrateBuy("Status: Idle")
             task.wait(0.5)
         end
     end
@@ -1344,7 +1471,7 @@ task.spawn(function()
             tryPlant()
             task.wait(math.max(0.05, Options.PlantDelay.Value))
         else
-            PlantStatus:SetText("Status: Idle")
+            setPlant("Status: Idle")
             task.wait(0.5)
         end
     end
@@ -1356,7 +1483,7 @@ task.spawn(function()
             tryBuyPets()
             task.wait(math.max(0.1, Options.PetDelay.Value))
         else
-            PetStatus:SetText("Status: Idle")
+            setPet("Status: Idle")
             task.wait(0.5)
         end
     end
@@ -1368,7 +1495,7 @@ task.spawn(function()
             collectDrops()
             task.wait(1)
         else
-            DropsStatus:SetText("Status: Idle")
+            setDrops("Status: Idle")
             task.wait(0.5)
         end
     end
@@ -1376,14 +1503,12 @@ end)
 
 task.spawn(function()
     while Alive() do
-        -- test webhook button
         if _G._gag_webhook_test then
             _G._gag_webhook_test = false
             local sent = sendWebhook("✅ Test from Grow a Garden script — webhook is working!")
-            MailStatus:SetText(sent and "Status: Webhook test sent" or "Status: Webhook failed (no URL / no http)")
+            setMail(sent and "Status: Webhook test sent" or "Status: Webhook failed (no URL / no http)")
         end
 
-        -- one-shot Send Once button
         if _G._gag_mail_once then
             _G._gag_mail_once = false
             sendMailOnce()
@@ -1392,14 +1517,10 @@ task.spawn(function()
 
         if Toggles.AutoMail.Value then
             local sent = sendMailOnce()
-            if sent then
-                task.wait(math.max(1.6, Options.MailInterval.Value))
-            else
-                task.wait(2)
-            end
+            task.wait(sent and math.max(1.6, Options.MailInterval.Value) or 2)
         else
             if not _G._gag_mail_once and not _G._gag_webhook_test then
-                MailStatus:SetText("Status: Idle")
+                setMail("Status: Idle")
             end
             task.wait(0.5)
         end
@@ -1413,6 +1534,15 @@ _G._gag_stop = function()
     _alive = false
     _G._gag_mail_once = false
     _G._gag_webhook_test = false
+
+    -- restore graphics
+    pcall(restorePerf)
+
+    -- drop harvest connections
+    for _, c in ipairs(harvestConns) do pcall(function() c:Disconnect() end) end
+    table.clear(harvestConns)
+    table.clear(harvestPrompts)
+
     pcall(function() player:SetAttribute("AntiAfkIdleOverride", 0) end)
     pcall(function() Library:Unload() end)
 end
