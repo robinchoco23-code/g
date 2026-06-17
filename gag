@@ -213,27 +213,27 @@ PetBox:AddDropdown("PetTypes", {
     Values  = PETS,
     Multi   = true,
     Default = {},
-    Tooltip = "Pick specific animals (e.g. Frog, Deer). Leave empty to match any animal.",
+    Tooltip = "Pick specific animals — these are always bought regardless of size (when 'Only Selected Types' is off)",
 })
 PetBox:AddToggle("FilterByType", {
     Text    = "Only Selected Types",
     Default = false,
-    Tooltip = "ON: only buy animals picked above (still needs a size match below). OFF: any animal qualifies.",
+    Tooltip = "OFF (default): buy your selected types in any size, PLUS any pet of any type matching the size toggles below. ON: strict — only buy a selected type if it ALSO matches a checked size.",
 })
 PetBox:AddToggle("MatchBig", {
     Text    = "Big",
     Default = true,
-    Tooltip = "Buy any pet whose name contains 'Big'",
+    Tooltip = "Also buy any pet (any type) whose name contains 'Big'",
 })
 PetBox:AddToggle("MatchHuge", {
     Text    = "Huge",
     Default = true,
-    Tooltip = "Buy any pet whose name contains 'Huge'",
+    Tooltip = "Also buy any pet (any type) whose name contains 'Huge'",
 })
 PetBox:AddToggle("MatchRainbow", {
     Text    = "Rainbow",
     Default = true,
-    Tooltip = "Buy any pet whose name contains 'Rainbow'",
+    Tooltip = "Also buy any pet (any type) whose name contains 'Rainbow'",
 })
 PetBox:AddToggle("AutoPet", {
     Text = "Auto Buy Pets", Default = false,
@@ -868,12 +868,13 @@ end
 -- Returns true if the gathered name text mentions any of the selected
 -- animal types from the PetTypes dropdown. Uses the same plain substring
 -- check, so "Frog" matches "Big Frog", "WildPet_Frog_1", etc. regardless
--- of exact formatting.
+-- of exact formatting. Returns false (not true) when nothing is selected —
+-- an empty selection means "I haven't asked for any specific type," not
+-- "any type is fine."
 local function typeMatches(nameText)
     local wanted = Options.PetTypes.Value
     if not wanted or not next(wanted) then
-        -- nothing selected → treat as "any type allowed"
-        return true
+        return false
     end
     for petName, active in pairs(wanted) do
         if active and textContains(nameText, petName:lower()) then
@@ -883,23 +884,35 @@ local function typeMatches(nameText)
     return false
 end
 
--- Decides whether this pet should be bought.
---   BuyAllPets ON       → always true, ignores everything else.
---   FilterByType ON     → must also match one of the selected animal types.
---   Otherwise           → true if the gathered name text contains "big",
---                          "huge", or "rainbow" AND the matching toggle is on.
-local function petMatches(nameText)
-    if Toggles.BuyAllPets.Value then return true end
-
-    if Toggles.FilterByType.Value and not typeMatches(nameText) then
-        return false
-    end
-
+-- Returns true if the gathered name text contains a checked size keyword
+-- (Big / Huge / Rainbow).
+local function sizeMatches(nameText)
     if Toggles.MatchBig.Value      and textContains(nameText, "big")      then return true end
     if Toggles.MatchHuge.Value     and textContains(nameText, "huge")     then return true end
     if Toggles.MatchRainbow.Value  and textContains(nameText, "rainbow")  then return true end
-
     return false
+end
+
+-- Decides whether this pet should be bought.
+--   BuyAllPets ON       → always true, ignores everything else.
+--   Only Selected Types ON  → strict: must be a selected type AND have a
+--                              matching size keyword (e.g. only "Big Frog"
+--                              if Frog is selected and Big is checked).
+--   Only Selected Types OFF → buy it if EITHER condition is true on its own:
+--                              it's one of your selected types (any size),
+--                              OR it has a matching size keyword (any type).
+--                              This is the default, additive behavior.
+local function petMatches(nameText)
+    if Toggles.BuyAllPets.Value then return true end
+
+    local isWantedType = typeMatches(nameText)
+    local isWantedSize = sizeMatches(nameText)
+
+    if Toggles.FilterByType.Value then
+        return isWantedType and isWantedSize
+    else
+        return isWantedType or isWantedSize
+    end
 end
 
 local function collectPetPrompts()
