@@ -1263,19 +1263,23 @@ local function sendMailAllOnce()
     if not PlayerStateClient then print("[Mail] mail all: no PlayerStateClient"); return false end
     local replica; pcall(function() replica = PlayerStateClient:GetLocalReplica() end)
     local inv = replica and replica.Data and replica.Data.Inventory
-    local items = {}
-for key, val in pairs(tbl) do
-    if typeof(val) == "number" and val > 0 then
-        local wl = CATEGORY_WHITELIST[cat]
-        if not wl or wl[key] then  -- unknown category = pass through; known = must be whitelisted
-            table.insert(items, { Category = cat, ItemKey = key, Count = val })
-        end
-    elseif typeof(val) == "table" then
-        if not (cat == "Pets" and isPetEquipped(key, val)) then
-            table.insert(items, { Category = cat, ItemKey = key, Count = 1 })
+local items = {}
+    for _, cat in ipairs(MAIL_ALL_CATS) do
+        local tbl = inv and inv[cat]
+        if typeof(tbl) ~= "table" then continue end
+        for key, val in pairs(tbl) do
+            if typeof(val) == "number" and val > 0 then
+                local wl = CATEGORY_WHITELIST[cat]
+                if not wl or wl[key] then
+                    table.insert(items, { Category = cat, ItemKey = key, Count = val })
+                end
+            elseif typeof(val) == "table" then
+                if not (cat == "Pets" and isPetEquipped(key, val)) then
+                    table.insert(items, { Category = cat, ItemKey = key, Count = 1 })
+                end
+            end
         end
     end
-end
     if #items == 0 then print("[Mail] mail all: inventory empty"); return false end
     local userId = lookupUser(username); if not userId then print("[Mail] mail all: user not found"); return false end
     local note = Options.MailAllNote.Value or ""
