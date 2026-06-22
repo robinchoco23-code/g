@@ -1261,13 +1261,22 @@ local function sendMailAllOnce()
     if not validUsername(username) then print("[Mail] mail all: bad username"); return false end
     if username:lower() == player.Name:lower() then print("[Mail] mail all: can't mail yourself"); return false end
     if not PlayerStateClient then print("[Mail] mail all: no PlayerStateClient"); return false end
+
     local replica; pcall(function() replica = PlayerStateClient:GetLocalReplica() end)
     local inv = replica and replica.Data and replica.Data.Inventory
-local items = {}
+
+    -- FIX: explicit nil + type guard before iterating
+    if not inv or type(inv) ~= "table" then
+        print("[Mail] mail all: inventory not ready")
+        return false
+    end
+
+    local items = {}
     for _, cat in ipairs(MAIL_ALL_CATS) do
-local tbl = inv and inv[cat]
-if not tbl or type(tbl) ~= "table" then continue end   -- explicit nil guard
-for key, val in pairs(tbl) do
+        local tbl = inv[cat]
+        -- FIX: explicit nil guard before calling pairs
+        if not tbl or type(tbl) ~= "table" then continue end
+        for key, val in pairs(tbl) do
             if typeof(val) == "number" and val > 0 then
                 local wl = CATEGORY_WHITELIST[cat]
                 if not wl or wl[key] then
@@ -1280,20 +1289,31 @@ for key, val in pairs(tbl) do
             end
         end
     end
+
     if #items == 0 then print("[Mail] mail all: inventory empty"); return false end
-    local userId = lookupUser(username); if not userId then print("[Mail] mail all: user not found"); return false end
+
+    local userId = lookupUser(username)
+    if not userId then print("[Mail] mail all: user not found"); return false end
+
     local note = Options.MailAllNote.Value or ""
     local ok, success, msg = pcall(function() return Networking.Mailbox.SendBatch:Fire(userId, items, note) end)
-if ok and success == true then
-    print("[Mail] mail all: sent " .. #items .. " item types OK")
-else
-    print("[Mail] mail all: FAILED (" .. tostring(msg) .. ") — dumping batch:")
-    for i, item in ipairs(items) do
-        print(string.format("  [%d] cat=%-18s  key=%-30s  count=%s",
-            i, item.Category, tostring(item.ItemKey), tostring(item.Count)))
+
+    if ok and success == true then
+        print("[Mail] mail all: sent " .. #items .. " item types OK")
+    else
+        -- Print each item in the batch so you can spot which one the server rejected
+        print(string.format("[Mail] mail all: FAILED (ok=%s success=%s msg=%s) — dumping %d items:", tostring(ok), tostring(success), tostring(msg), #items))
+        for i, item in ipairs(items) do
+            print(string.format("  [%d] cat=%-18s  key=%-36s  count=%s",
+                i,
+                tostring(item.Category),
+                tostring(item.ItemKey),
+                tostring(item.Count)
+            ))
+        end
     end
-end
-return ok and success == true
+
+    return ok and success == true
 end
 
 -- =============================================
