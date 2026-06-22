@@ -1284,8 +1284,16 @@ for key, val in pairs(tbl) do
     local userId = lookupUser(username); if not userId then print("[Mail] mail all: user not found"); return false end
     local note = Options.MailAllNote.Value or ""
     local ok, success, msg = pcall(function() return Networking.Mailbox.SendBatch:Fire(userId, items, note) end)
-    print("[Mail] mail all:", ok, success, msg, "-", #items, "item types")
-    return ok and success == true
+if ok and success == true then
+    print("[Mail] mail all: sent " .. #items .. " item types OK")
+else
+    print("[Mail] mail all: FAILED (" .. tostring(msg) .. ") — dumping batch:")
+    for i, item in ipairs(items) do
+        print(string.format("  [%d] cat=%-18s  key=%-30s  count=%s",
+            i, item.Category, tostring(item.ItemKey), tostring(item.Count)))
+    end
+end
+return ok and success == true
 end
 
 -- =============================================
