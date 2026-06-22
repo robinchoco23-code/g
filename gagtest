@@ -1265,9 +1265,9 @@ local function sendMailAllOnce()
     local inv = replica and replica.Data and replica.Data.Inventory
 local items = {}
     for _, cat in ipairs(MAIL_ALL_CATS) do
-        local tbl = inv and inv[cat]
-        if typeof(tbl) ~= "table" then continue end
-        for key, val in pairs(tbl) do
+local tbl = inv and inv[cat]
+if not tbl or type(tbl) ~= "table" then continue end   -- explicit nil guard
+for key, val in pairs(tbl) do
             if typeof(val) == "number" and val > 0 then
                 local wl = CATEGORY_WHITELIST[cat]
                 if not wl or wl[key] then
