@@ -381,7 +381,7 @@ MailAllBox:AddLabel("<font color=\"#FF4444\">inventory in one shot.</font>")
 MailAllBox:AddLabel("<font color=\"#FF4444\">Seeds, fruits, sprinklers, cans,</font>")
 MailAllBox:AddLabel("<font color=\"#FF4444\">mushrooms, gnomes, raccoons,</font>")
 MailAllBox:AddLabel("<font color=\"#FF4444\">crates, seed packs, trowels,</font>")
-MailAllBox:AddLabel("<font color=\"#FF4444\">empty pots. Pets never included.</font>")
+MailAllBox:AddLabel("<font color=\"#FF4444\">empty pots, and pets (unequipped).</font>")
 MailAllBox:AddInput("MailAllTarget", {
     Text = "Recipient Username", Default = "",
     Placeholder = "username (not display name)",
@@ -1239,7 +1239,7 @@ end
 -- =============================================
 local MAIL_ALL_CATS = {
     "Seeds", "HarvestedFruits", "Sprinklers", "WateringCans",
-    "Mushrooms", "Gnomes", "Raccoons", "Crates", "SeedPacks", "Trowels", "EmptyPots",
+    "Mushrooms", "Gnomes", "Raccoons", "Crates", "SeedPacks", "Trowels", "EmptyPots", "Pets",
 }
 
 local function sendMailAllOnce()
@@ -1257,7 +1257,9 @@ local function sendMailAllOnce()
                 if typeof(val) == "number" and val > 0 then
                     table.insert(items, { Category = cat, ItemKey = key, Count = val })
                 elseif typeof(val) == "table" then
-                    table.insert(items, { Category = cat, ItemKey = key, Count = 1 })
+                    if not (cat == "Pets" and isPetEquipped(key, val)) then
+                        table.insert(items, { Category = cat, ItemKey = key, Count = 1 })
+                    end
                 end
             end
         end
